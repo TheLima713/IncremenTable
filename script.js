@@ -45,11 +45,12 @@ class Screen {
             h: this.height
         };
     }
-    setBounds(x, y, w, h) {
-        this.x = x;
-        this.y = y;
-        this.width = w;
-        this.height = h;
+    setBounds(bounds) {
+        this.x = bounds.x;
+        this.y = bounds.y;
+        this.width = bounds.w;
+        this.height = bounds.h;
+        return this;
     }
     setDraw(fn) {
         this.draw = fn;
@@ -58,15 +59,21 @@ class Screen {
 }
 //This is the class for the visuals of an Element
 class Atom {
-    constructor(parent,protons, electrons, color, scene, x = null, y = null, vx = null, vy = null) {
+    constructor(parent,protons, electrons, color, screen, x = null, y = null, vx = null, vy = null) {
         this.parent = parent;
         this.protons = protons;
         this.electrons = electrons;
         this.color = color;
-        this.radius = 5 + 2 * Math.floor(this.protons / 2);
+        this.radius = 5;
+        this.screen = screen;
         
-        this.x = x || Math.floor(Math.random() * scene.width);
-        this.y = y || Math.floor(Math.random() * scene.height);
+        let system = this.parent.parent.parent;
+        this.element = system.gameData.getElementByProtons(this.protons);
+        
+        let rndX = screen.x + Math.floor(Math.random() * screen.width);
+        let rndY = screen.y + Math.floor(Math.random() * screen.height);
+        this.x = x || rndX;
+        this.y = y || rndY;
 
         this.vx = vx || 1 * (Math.random() - 0.5);
         this.vy = vy || 1 * (Math.random() - 0.5);
@@ -104,11 +111,11 @@ class Atom {
         this.x += this.vx;
         this.y += this.vy;
         // Bounce off walls
-        let renderer = this.parent.parent.parent.renderer;
-        if (this.x < 0 || this.x > renderer.width) {
+        let bounds = this.screen.getBounds();
+        if (this.x < bounds.x || this.x > bounds.w) {
             this.vx *= -1;
         }
-        if (this.y < 0 || this.y > renderer.height) {
+        if (this.y < bounds.y || this.y > bounds.h) {
             this.vy *= -1;
         }
         return this;
@@ -128,9 +135,58 @@ class Atom {
         );
     }
 }
+//This is an instance of the various upgrades an element can have
+class Upgrade {
+    constructor(parent, label, cost, costMultiplier = 1) {
+        this.parent = parent;
+        this.label = label;
+        this.cost = cost;
+        this.costMultiplier = costMultiplier;
+
+        this.upgrade = ()=>{};
+
+        let system = this.parent.parent.parent;
+        let scene = system.getScene('Main Scene');
+        this.button = new Button(`${this.label} ${this.parent.symbol}`,this)
+            .setBounds({
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0
+            })
+            .setOnClick((event)=>{
+                if(this.parent.score<this.cost) return;
+                this.parent.score -= this.cost;
+                this.upgrade();
+
+                //Charge cost
+                let system = this.parent.parent.parent;
+                let particleManager = system.getScene('Main Scene').particleManager;
+                let element = this.parent
+
+                let availableAtoms = particleManager.atoms.filter((atom)=>{
+                    return element.symbol===atom.element.symbol;
+                });
+
+                for(let i=0;i<this.cost;i++) {
+                    particleManager.removeAtom(availableAtoms[i].id);
+                }
+                
+                //Increase cost
+                this.cost = Math.floor(this.cost * this.costMultiplier, this.cost);
+            });
+        scene.addButton(this.button);
+    }
+    setOnUpgrade(fn) {
+        this.upgrade = fn;
+        return this;
+    }
+}
 //This contains the parameters for an Element's incremental and others
 class Element {
-    constructor(name, symbol, protons, electrons, color) {
+    constructor(parent, name, symbol, protons, electrons, color) {
+        this.parent = parent;
+
         this.name = name;
         this.symbol = symbol;
         this.protons = protons;
@@ -143,7 +199,56 @@ class Element {
         this.critMultiplier = 1;
         this.upgrades = []
 
-        this.shopButton
+        this.addUpgrade(
+                new Upgrade(this,'increment', 10, 1.1)
+                    .setOnUpgrade(function(){
+                        this.parent.increment++;
+                    })
+            ).addUpgrade(
+                new Upgrade(this,'crit chance', 25, 1.25)
+                    .setOnUpgrade(function(){
+                        this.parent.critChance+=0.1;
+                    })
+            ).addUpgrade(
+                new Upgrade(this,'crit multiplier', 50, 1.5)
+                    .setOnUpgrade(function(){
+                        this.parent.critMultiplier++;
+                    })
+            );
+
+        let system = this.parent.parent;
+        let scene = system.getScene('Main Scene');
+        this.shopButton = new Button(`${this.name} Upgrades`, scene)
+            .setBounds({
+                x: 25-15,
+                y: 50-15,
+                w: 30,
+                h: 30
+            })
+            .setOnClick(function(event) {
+                if(system.shopElement !== null) return;
+                system.openShop(symbol);
+            }.bind(this))
+        scene.addButton(this.shopButton);
+    }
+    addUpgrade(upgrade){
+        this.upgrades.push(upgrade);
+        
+        let system = this.parent.parent;
+        let scene = system.getScene('Main Scene');
+        scene.addButton(upgrade.button);
+
+        return this;
+    }
+    getUpgrade(label) {
+        let upgrade = this.upgrades.find((upgrade)=>{return upgrade.label === label})
+        if(upgrade) {
+            return upgrade;
+        } else {
+            console.warn(`Upgrade ${upgrade} not found for ${this.name}.`);
+            return null;
+        }
+
     }
     incrementScore(ammount = this.increment) {
         this.score += ammount;
@@ -151,8 +256,31 @@ class Element {
     getScore() {
         return this.score;
     }
-    setButton(button) {
+    setShopButton(button) {
         this.shopButton = button;
+    }
+    drawShopButton(renderer, frameCount){
+        let box = this.shopButton.getBounds();
+                        
+        let gameData = this.parent;
+        let system = gameData.parent;
+        let scene = system.getScene('Main Scene');
+        let index = this.protons - 1;
+
+        let startX = 25;
+        let startY = 50;
+
+        renderer.context.globalAlpha = 0.3;
+        renderer.context.fillStyle = this.color;
+        renderer.context.fillRect(box.x,box.y,box.w,box.h);
+        renderer.context.globalAlpha = 1;
+
+        let atom = new Atom(scene.particleManager, this.protons, this.electrons, this.color, this)
+            .setPosition(startX, startY + 50 * index)
+            .setRadius(5);
+        atom.draw(renderer, frameCount);
+
+        renderer.drawText(startX + 25, startY + 50 * index,`${this.name} Atoms: ${this.getScore()}`, 'white', 15);
     }
 }
 class ParticleManager {
@@ -174,10 +302,10 @@ class ParticleManager {
         });
         return this;
     }
-    addAtom(element, scene) {
-        let atom = new Atom(this, element.protons, element.electrons, element.color, scene);
+    addAtom(element, screen) {
+        let atom = new Atom(this, element.protons, element.electrons, element.color, screen);
         atom.setAngle(2 * Math.PI * Math.random())
-        element.incrementScore();
+        element.incrementScore(1);
 
         atom.id = atom.id || this.atomIndex;
         this.atomIndex++;
@@ -193,10 +321,17 @@ class ParticleManager {
     getAtom(id) {
         return this.atoms.find(atom => atom.id === id);
     }
+    removeAtom(id) {
+        let atom = this.atoms.find((atom)=>{return atom.id===id});
+        if(atom) {
+            this.atoms.splice(this.atoms.indexOf(atom),1);
+            return true;
+        } else {
+            console.warn(`Atom ${id} not found.`);
+            return false;
+        }
+    }
     checkCollisions(atom1) {
-        //ParticleManager->Scene->System
-        let scene = this.parent;
-        let gameData = scene.parent.gameData;
         let newAtoms = [];
         
         this.atoms.forEach(function(atom2) {
@@ -205,41 +340,84 @@ class ParticleManager {
             let dx = atom1.x - atom2.x;
             let dy = atom1.y - atom2.y;
             let distance = Math.sqrt(dx * dx + dy * dy);
-            let centerDistances = atom1.radius + atom2.radius; // Sum of radii for collision detection
+            let centerDistances = atom1.radius + atom2.radius;
 
             if (distance <= centerDistances && atom1.protons === atom2.protons && atom1.electrons === atom2.electrons) {
-                let oldElement = gameData.getElementByProtons(atom1.protons);
-                let newElement = gameData.getElementByProtons(atom1.protons + 1);
-                if (!newElement) {
-                    console.warn(`Element with ${atom1.protons + 1} protons not found in game data.`);
-                    return;
-                }
-
-                if(!gameData.unlockedElements.includes(newElement)) {
-                    gameData.addUnlockedElement(newElement);
-                }
-                
-                this.atoms.splice(this.atoms.indexOf(atom1), 1);
-                this.atoms.splice(this.atoms.indexOf(atom2), 1);
-                oldElement.incrementScore(-2);
-
-                newElement.incrementScore(1);
-                let newAtom = new Atom(this, newElement.protons, newElement.electrons, newElement.color, scene)
-                    .setPosition(
-                        (atom1.x + atom2.x) / 2,
-                        (atom1.y + atom2.y) / 2
-                    )
-                    .setSpeed(
-                        (atom1.vx + atom2.vx) / 2,
-                        (atom1.vy + atom2.vy) / 2
-                    );
-                newAtoms.push(newAtom);
+                let createdAtoms = this.mergeAtoms(atom1,atom2);
+                createdAtoms.forEach((atom)=>{
+                    newAtoms.push(atom);
+                })
             }
         }.bind(this));
         // Add new atoms to the ParticleManager
         newAtoms.forEach(function(newAtom) {
             this.pushAtom(newAtom);
         }.bind(this));
+    }
+    mergeAtoms(atom1,atom2) {
+        let scene = this.parent;
+        let system = this.parent.parent;
+        let screen = scene.getScreen('Simulation Display');
+        console.log(screen)
+        let gameData = scene.parent.gameData;
+
+        let oldElement = gameData.getElementByProtons(atom1.protons);
+        let newElement = gameData.getElementByProtons(atom1.protons + 1);
+        if (!newElement) {
+            console.warn(`Element with ${atom1.protons + 1} protons not found in game data.`);
+            return;
+        }
+
+        if(!gameData.unlockedElements.includes(newElement)) {
+            gameData.addUnlockedElement(newElement);
+        }
+
+        //Calculate Crits
+        let guaranteedCrits = Math.floor(newElement.critChance);
+        if(Math.random()<(newElement.critChance-guaranteedCrits)) {
+            console.log('hit a crit');
+            guaranteedCrits++;
+        }
+
+        let baseMultiplier = 1;
+        for(let i=0;i<guaranteedCrits;i++) {
+            baseMultiplier *= newElement.critMultiplier;
+        }
+        let finalMultiplier = Math.floor(baseMultiplier);
+        
+        //Update array
+        this.atoms.splice(this.atoms.indexOf(atom1), 1);
+        this.atoms.splice(this.atoms.indexOf(atom2), 1);
+        oldElement.incrementScore(-2);
+        
+        let newAtoms = [];
+        for(let i=0;i<finalMultiplier;i++) {
+            newElement.incrementScore(1);
+
+            let bounds = screen.getBounds();
+            let offsetPosition = {
+                x: 0.5 * (atom1.x + atom2.x),
+                y: 0.5 * (atom1.y + atom2.y)
+            }
+            if(i>0) {
+                offsetPosition = {
+                    x: bounds.x + bounds.w * Math.random(),
+                    y: bounds.y + bounds.h * Math.random()
+                }
+            }
+            
+            let newAtom = new Atom(this, newElement.protons, newElement.electrons, newElement.color, screen)
+                .setPosition(
+                    (offsetPosition.x),
+                    (offsetPosition.y)
+                )
+                .setSpeed(
+                    (atom1.vx + atom2.vx) / 2,
+                    (atom1.vy + atom2.vy) / 2
+                );
+            newAtoms.push(newAtom);
+        }
+        return newAtoms;
     }
 }
 //This is meant to be used as a generic region collider for the mouse, the renderer's function is simply a helper
@@ -251,6 +429,7 @@ class Button {
         this.y = y;
         this.width = width;
         this.height = height;
+        this.active = true;
 
         this.onClick = function() {};
         this.draw = function() {};
@@ -259,15 +438,15 @@ class Button {
         return {
             x: this.x,
             y: this.y,
-            width: this.width,
-            height: this.height
+            w: this.width,
+            h: this.height
         };
     }
-    setBounds(x, y, w, h) {
-        this.x = x;
-        this.y = y;
-        this.width = w;
-        this.height = h;
+    setBounds(bounds) {
+        this.x = bounds.x;
+        this.y = bounds.y;
+        this.width = bounds.w;
+        this.height = bounds.h;
         return this;
     }
     setOnClick(fn) {
@@ -277,6 +456,13 @@ class Button {
     setDraw(fn) {
         this.draw = fn;
         return this;
+    }
+    setActive(active) {
+        this.active = active;
+        return this;
+    }
+    getActive() {
+        return this.active;
     }
 }
 class Scene {
@@ -335,22 +521,25 @@ class Scene {
         return this;
     }
     getScreen(label) {
-        if (this.screens[label]) {
-            return this.screens[label];
+        let screen = this.screens.find((screen)=>{return screen.label === label})
+        if (screen) {
+            return screen;
         } else {
             console.warn(`Screen ${label} not found in scene ${this.label}.`);
             return null;
         }
     }
-    addAtom(symbol) {
+    addAtom(symbol, screenLabel) {
         let gameData = this.parent.gameData;
+
+        let screen = this.screens.find((screen)=>{return screen.label === screenLabel});
         let elementData = gameData.getElement(symbol);
         if (!elementData) {
             console.warn(`Element '${symbol}' not found in game data.`);
             return;
         }
         
-        return this.particleManager.addAtom(elementData,this);
+        return this.particleManager.addAtom(elementData,screen);
     }
     addButton(button, buttonIndex = undefined) {
         button.parent = this;
@@ -361,6 +550,26 @@ class Scene {
 
         return this;
     }
+    removeButton(label) {
+        let button = this.buttons.find((button)=>{return button.label===label});
+        if (button) {
+            let index = this.buttons.indexOf(button);
+            this.buttons.splice(index,1);
+            return true;
+        } else {
+            console.warn(`Button ${label} not found in scene ${this.label}.`);
+            return false;
+        }
+    }
+    getButton(label) {
+        let button = this.buttons.find((button)=>{return button.label===label});
+        if (button) {
+            return button;
+        } else {
+            console.warn(`Button ${label} not found in scene ${this.label}.`);
+            return null;
+        }
+    }
 }
 class Config {
     setFPS(fps) {
@@ -369,20 +578,19 @@ class Config {
     }
 }
 class GameData {
-    constructor() {
+    constructor(parent) {
+        this.parent = parent;
         this.elements = [
-            new Element('Hydrogen', 'H', 1, 1, 'hsl(210, 100%, 50%)'),
-            new Element('Helium', 'He', 2, 2, 'hsl(30, 100%, 50%)'),
-            new Element('Lithium', 'Li', 3, 3, 'hsl(270, 100%, 50%)'),
-            new Element('Beryllium', 'Be', 4, 4, 'hsl(0, 100%, 75%)'),
-            new Element('Boron', 'B', 5, 5, 'hsl(180, 100%, 30%)'),
-            new Element('Carbon', 'C', 6, 6, 'hsl(0, 0%, 50%)'),
-            new Element('Nitrogen', 'N', 7, 7, 'hsl(0, 100%, 50%)'),
-            new Element('Oxygen', 'O', 8, 8, 'hsl(180, 50%, 75%)'),
-            new Element('Fluorine', 'F', 9, 9, 'hsl(60, 100%, 50%)'),
-            new Element('Neon', 'Ne', 10, 10, 'hsl(240, 100%, 75%)'),
-            new Element('Sodium', 'Na', 11, 11, 'hsl(120, 100%, 50%)'),
-            new Element('Magnesium', 'Mg', 12, 12, 'hsl(300, 100%, 50%)'),
+            new Element(this, 'Hydrogen', 'H', 1, 1, 'hsl(210, 100%, 50%)'),
+            new Element(this, 'Helium', 'He', 2, 2, 'hsl(30, 100%, 50%)'),
+            new Element(this, 'Lithium', 'Li', 3, 3, 'hsl(270, 100%, 50%)'),
+            new Element(this, 'Beryllium', 'Be', 4, 4, 'hsl(0, 100%, 75%)'),
+            new Element(this, 'Boron', 'B', 5, 5, 'hsl(180, 100%, 30%)'),
+            new Element(this, 'Carbon', 'C', 6, 6, 'hsl(0, 0%, 50%)'),
+            new Element(this, 'Nitrogen', 'N', 7, 7, 'hsl(0, 100%, 50%)'),
+            new Element(this, 'Oxygen', 'O', 8, 8, 'hsl(180, 50%, 75%)'),
+            new Element(this, 'Fluorine', 'F', 9, 9, 'hsl(60, 100%, 50%)'),
+            new Element(this, 'Neon', 'Ne', 10, 10, 'hsl(240, 100%, 75%)'),
         ]
         this.spawningElement = 'H';
         this.currRecordScore = 0;
@@ -392,6 +600,12 @@ class GameData {
         return this.unlockedElements;
     }
     addUnlockedElement(element) {
+        //Displace the next button based on the previous
+        let lastElement = this.unlockedElements.slice(-1)[0];
+        let lastPosition = lastElement.shopButton.getBounds();
+        lastPosition.y += 50;
+        element.shopButton.setBounds(lastPosition);
+
         this.unlockedElements.push(element);
     }
     getElement(symbol) {
@@ -420,16 +634,6 @@ class GameData {
             console.warn(`Element ${symbol} not found in game data.`);
             return null;
         }
-    }
-    //If no ammount is specified, use the Element's default increment
-    incrementScore(symbol, amount = undefined) {
-        let element = this.elements.find(el => el.symbol === symbol);
-        if (element) {
-            element.incrementScore(amount);
-        } else {
-            console.warn(`Element ${element} not found in game data.`);
-        }
-        return this.getScore(symbol);
     }
 }
 class Renderer {
@@ -580,12 +784,14 @@ class System {
         this.sceneIndex = 0;
         this.eventBuffer = [];
         this.mousePosition = { x: 0, y: 0 };
-        this.gameData = new GameData();
         this.config = new Config();
 
         this.renderer;
+        this.gameData;
+
+        this.shopElement = null;
     }
-    init() {
+    initListeners() {
         //Set listeners
         document.addEventListener('click', function(event) {
             if(event.target !== this.renderer.canvas) return;
@@ -606,6 +812,9 @@ class System {
         this.renderer = renderer;
         return this;
     }
+    setGameData(gameData){
+        this.gameData = gameData;
+    }
     setConfig(config) {
         this.config = config;
         return this;
@@ -614,12 +823,27 @@ class System {
         this.scenes.push(scene);
         return this;
     }
+    getScene(label) {
+        let scene = this.scenes.find((scene)=>{return scene.label===label});
+        if(scene) {
+            return scene;
+        } else {
+            console.warn(`Scene ${label} not found in system.`);
+            return null;
+        }
+    }
     setGameData(gameData) {
         this.gameData = gameData;
         return this;
     }
     getGameData() {
         return this.gameData;
+    }
+    openShop(symbol) {
+        this.shopElement = symbol;
+    }
+    closeShop() {
+        this.shopElement = null;
     }
 }
 
@@ -631,60 +855,67 @@ function initSys() {
     Setting system's config before or after altering the main
     'config' doesn't matter, just doing it here for clarity.
     */
-    const config = new Config()
-        .setFPS(30);
+    const config = new Config().setFPS(30);
+    system.setConfig(config);
     const renderer = new Renderer(document.getElementById('canvas'));
-    system
-        .setConfig(config)
-        .setRenderer(renderer);
-    system.init();
-
-    const globalBox = {
-        x: 0,
-        y: 0,
-        width: system.renderer.width,
-        height: system.renderer.height
-    }
+    system.setRenderer(renderer);
     const scene1 = new Scene('Main Scene', system);
-        
-        const newAtomButton = new Button('New Atom', scene1)
-            .setBounds(
-                0.25 * globalBox.width,
-                0,
-                0.75 * globalBox.width,
-                globalBox.height
-            )
-            .setOnClick(function(event) {
-                let gameData = this.parent.parent.gameData;
-                let spawningElement = gameData.spawningElement;
-                this.parent.addAtom(spawningElement);
+    system.addScene(scene1);
+    const gameData = new GameData(system);
+    system.setGameData(gameData);
+
+    system.initListeners();
+    
+    const newAtomButton = new Button('New Atom', scene1)
+        .setBounds({
+            x: 0.25 * system.renderer.width,
+            y: 0,
+            w: 0.75 * system.renderer.width,
+            h: system.renderer.height
+        })
+        .setOnClick(function(event) {
+            let element = system.gameData.getElement(system.gameData.spawningElement);            
+            let scene = system.getScene('Main Scene');
+            
+            for(let i=0;i<element.increment;i++) {
+                scene.particleManager.addAtom(element,scene.getScreen('Simulation Display'));
+            }
+        })
+        .setDraw(function(renderer, frameCount) {
+            return;
+        })
+    scene1.addButton(newAtomButton);
+    
+    const closeShopButton = new Button('Close Shop',scene1)
+        .setBounds({
+            x: 0.25 * system.renderer.width - 25,
+            y: 20,//0.10 * system.renderer.height,
+            w: 20,
+            h: 20
+        })
+        .setOnClick(function(event) {
+            if(system.shopElement === null) return;
+            let upgrades = system.gameData.getElement(system.shopElement).upgrades;
+            upgrades.forEach((upgrade,index)=>{
+                upgrade.button.setActive(false);
             })
-            .setDraw(function(renderer, frameCount) {
-                return;
-            })
-        
-        const shopButton = new Button('Hydrogen Upgrades', scene1)
-            .setBounds(
-                25-15,
-                50-15,
-                30,
-                30
-            )
-            .setOnClick(function(event) {
-                let symbol = 'H'
-            })
-            .setDraw(function(renderer, frameCount) {
-                let box = this.getBounds();
-                renderer.context.fillStyle = `rgba(0,0,255,0.5)`;
-                renderer.context.fillRect(box.x,box.y,box.width,box.height);
-            })
-        
+            system.closeShop();
+        })
+        .setDraw(function(renderer, frameCount) {
+            if(system.shopElement === null) return;
+
+            let box = this.getBounds();
+            renderer.context.fillStyle = 'rgba(255, 0, 0, 0.5)';
+            renderer.context.fillRect(box.x, box.y, box.w, box.h);
+
+            renderer.drawText(box.x + box.w/4,box.y + box.h/2,'X','white',20);
+            return;
+        });
+    scene1.addButton(closeShopButton);
+
     scene1.setInit(function() {
-            console.log('Scene 1 initialized');
             this.run();
         })
-        .addButton(newAtomButton)
-        .addButton(shopButton)
         .setRun(function() {
             this.frameCount++;
             this.particleManager.run();
@@ -699,9 +930,10 @@ function initSys() {
                         let mousePosition = this.parent.mousePosition
                         if(mousePosition.x < bounds.x) return;
                         if(mousePosition.y < bounds.y) return;
-                        if(mousePosition.x > bounds.x + bounds.width) return;
-                        if(mousePosition.y > bounds.y + bounds.height) return;
+                        if(mousePosition.x > bounds.x + bounds.w) return;
+                        if(mousePosition.y > bounds.y + bounds.h) return;
                         if(clicked) return;//Already processed
+                        if(button.getActive()===false) return;
                         button.onClick();
                         clicked = true;                   
                     }.bind(this));
@@ -714,61 +946,100 @@ function initSys() {
             setTimeout(this.run.bind(this), 1000/config.fps);
         })
         .setClean(function() {
-            console.log('Scene 1 cleaned up');
         })
         
-        const mainBackground = new Screen('Main Background', scene1)
-            .setDraw(function(renderer, frameCount) {
-                renderer.clearBackground('black');
-            })
         const simulationDisplay = new Screen('Simulation Display', scene1)
+            .setBounds({
+                x: 0.25 * renderer.width,
+                y: 0,
+                w: 0.75 * renderer.width,
+                h: renderer.height
+            })
             .setDraw(function(renderer, frameCount) {
+                let box = this.getBounds();
+
+                renderer.clearBackground('black');
                 let scene = this.parent;
 
                 scene.particleManager.draw(renderer, this.parent.frameCount);
             })
-        const mainUIBackground = new Screen('Main UI Background', scene1)
+        const mainUI = new Screen('Main UI', scene1)
+            .setBounds({
+                x: 0,
+                y: 0,
+                w: 0.25 * renderer.width,
+                h: renderer.height
+            })
             .setDraw(function(renderer, frameCount) {
-                let box = {
-                    x: 0,
-                    y: 0,
-                    w: 0.25 * renderer.width,
-                    h: renderer.height
-                }
+                if(system.shopElement!==null) return;
+
+                let box = this.getBounds();
                 renderer.context.fillStyle = 'rgba(255, 255, 255, 0.1)';
                 renderer.context.fillRect(box.x, box.y, box.w, box.h);
-            })
-        const mainUI = new Screen('Main UI', scene1)
-            .setDraw(function(renderer, frameCount) {
-                let box = {
-                    x: 0,
-                    y: 0,
-                    w: 0.25 * renderer.width,
-                    h: renderer.height
-                }
                 
                 let gameData = this.parent.parent.gameData;
 
-                let startX = 25;
-                let startY = 50;
-
                 let displayElements = gameData.getUnlockedElements();
                 displayElements.forEach(function(element, index) {
+                    element.drawShopButton(renderer,frameCount);
+                })
+            })
+        const shopUI = new Screen('Shop UI',scene1)
+            .setBounds({
+                x: 0,
+                y: 0,
+                w: 0.25 * renderer.width,
+                h: renderer.height
+            })
+            .setDraw(function(renderer,frameCount){
+                if(system.shopElement===null) {
+                    return;
+                }
 
-                    let atom = new Atom(this.parent.particleManager, element.protons, element.electrons, element.color, this.parent)
-                        .setPosition(25, startY + 50 * index)
-                        .setRadius(10);
-                    atom.draw(renderer, frameCount);
-                    renderer.drawText(50, startY + 50 * index,`${element.name} Atoms: ${element.getScore()}`, 'white', 20);
+                let box = this.getBounds();
+                let element = system.gameData.getElement(system.shopElement);
+                let upgrades = element.upgrades;
+                upgrades.forEach((upgrade,index)=>{
+                    upgrade.button.setActive(true);
+                })
+                
+                
+                //Draw Background
+                renderer.context.globalAlpha = 0.1;
+                renderer.context.fillStyle = element.color;
+                renderer.context.fillRect(box.x, box.y, box.w, box.h);
+                renderer.context.globalAlpha = 1;
+
+                //Title (Close button is drawn separately)
+                renderer.drawText(20,20,`${element.name} Shop (${element.score} points)`,'white',20);
+                
+
+                upgrades.forEach((upgrade,index)=>{
+                    let textDimensions = renderer.context.measureText(upgrade.label);
+
+                    let button = upgrade.button
+                        .setBounds({
+                            x: 20,
+                            y: 60 + (40 * index),
+                            w: textDimensions.width,
+                            h: 20
+                        })
+                    let buttonBounds = button.getBounds();
+                    
+                    //Draw Outline and Text
+                    renderer.context.globalAlpha = 0.2;
+                    renderer.context.fillStyle = '#fff';
+                    renderer.context.fillRect(buttonBounds.x, buttonBounds.y, buttonBounds.w, buttonBounds.h);
+                    renderer.context.globalAlpha = 1;
+                    
+                    renderer.drawText(buttonBounds.x,buttonBounds.y + textDimensions.actualBoundingBoxAscent/2,`${upgrade.label} : ${upgrade.cost}`,'white',20);
                 })
             })
 
-        scene1.addScreen(mainBackground);
         scene1.addScreen(simulationDisplay);
-        scene1.addScreen(mainUIBackground);
         scene1.addScreen(mainUI);
+        scene1.addScreen(shopUI);
 
-    system.addScene(scene1);
     // Run the first scene
     system.scenes[0].init();
 }
