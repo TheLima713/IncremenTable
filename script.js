@@ -25,49 +25,61 @@ Game Ideas:
     Particle accelerator upgrade, makes all atoms move faster along X secs
 */
 
-class Screen {
-    constructor(label, parent) {
+class Effect {
+    constructor(system,label) {
+        this.system = system;
         this.label = label;
-        this.parent = parent;
-        let renderer = this.parent.parent.renderer;
-        this.x = 0;
-        this.y = 0;
-        this.width = renderer.width;
-        this.height = renderer.height;
-        this.drawIndex = 0;
+        
+        this.countdown;
+        this.currFrame = 0;
+        this.duration;
+        
+        this.start = function(){};
+        this.run = function(){};
         this.draw = function(){};
+        this.end = function(){};
+        
     }
-    getBounds() {
-        return {
-            x: this.x,
-            y: this.y,
-            w: this.width,
-            h: this.height
-        };
+    getState() {
+        if(this.duration===0) return 'idle';
+        if(this.countdown>0) return 'countdown';
+        if(this.countdown<=0 && this.currFrame===0) return 'starting';
+        if(this.countdown<=0 && this.currFrame>=this.duration) return 'ending';
+        return 'running';
     }
-    setBounds(bounds) {
-        this.x = bounds.x;
-        this.y = bounds.y;
-        this.width = bounds.w;
-        this.height = bounds.h;
+    setTimings(countdownFrames,durationFrames) {
+        this.countdown = countdownFrames;
+        this.duration = durationFrames;
+        return this;
+    }
+    setStart(fn) {
+        this.start = fn;
+        return this;
+    }
+    setRun(fn) {
+        this.run = fn;
         return this;
     }
     setDraw(fn) {
         this.draw = fn;
         return this;
     }
+    setEnd(fn) {
+        this.end = fn;
+        return this;
+    }
 }
 //This is the class for the visuals of an Element
 class Atom {
-    constructor(parent,protons, electrons, color, screen, x = null, y = null, vx = null, vy = null) {
-        this.parent = parent;
+    constructor(particleManager,protons, electrons, color, screen, x = null, y = null, vx = null, vy = null) {
+        this.particleManager = particleManager;
         this.protons = protons;
         this.electrons = electrons;
         this.color = color;
-        this.radius = 5;
+        this.radius = 3;
         this.screen = screen;
         
-        let system = this.parent.parent.parent;
+        let system = this.particleManager.scene.system;
         this.element = system.gameData.getElementByProtons(this.protons);
         
         let rndX = screen.x + Math.floor(Math.random() * screen.width);
@@ -80,8 +92,16 @@ class Atom {
         
         this.angle;
     }
-    getMaxProtons (level) {return level === 0 ? 1 : 6*level}
-    getMaxElectrons (level) {return 2*(level + 1)**2}
+    getMaxProtons(level) {return level === 0 ? 1 : 6*level}
+    getMaxElectrons(level) {return 2*(level + 1)**2}
+    getMaxLevel(protons = this.protons, level = 0) {
+        let levelProtons = this.getMaxProtons(level);
+        protons -= levelProtons;
+        level++;
+        
+        if(protons <= 0) return level;
+        else return this.getMaxLevel(protons,level);
+    }
     setRadius(radius) {
         this.radius = radius;
         return this;
@@ -112,10 +132,10 @@ class Atom {
         this.y += this.vy;
         // Bounce off walls
         let bounds = this.screen.getBounds();
-        if (this.x < bounds.x || this.x > bounds.w) {
+        if (this.x < bounds.x || this.x > bounds.x + bounds.w) {
             this.vx *= -1;
         }
-        if (this.y < bounds.y || this.y > bounds.h) {
+        if (this.y < bounds.y || this.y > bounds.y + bounds.h) {
             this.vy *= -1;
         }
         return this;
@@ -137,17 +157,22 @@ class Atom {
 }
 //This is an instance of the various upgrades an element can have
 class Upgrade {
-    constructor(parent, label, cost, costMultiplier = 1) {
-        this.parent = parent;
-        this.label = label;
+    constructor(element, cost, level, maxLevel) {
+        this.element = element;
+
         this.cost = cost;
-        this.costMultiplier = costMultiplier;
+        this.level = 0;
+        this.maxLevel = maxLevel;
 
-        this.upgrade = ()=>{};
+        this.upgrade = function(){};
+        this.getNewCost = function(){};
+        this.getLabel = function(){};
+        this.getDescription = function(){};
+        this.getIncrease = function(){};
 
-        let system = this.parent.parent.parent;
+        let system = this.element.gameData.system;
         let scene = system.getScene('Main Scene');
-        this.button = new Button(`${this.label} ${this.parent.symbol}`,this)
+        this.button = new Button(`${this.label} ${this.element.symbol}`,this)
             .setBounds({
                 x: 0,
                 y: 0,
@@ -155,14 +180,16 @@ class Upgrade {
                 h: 0
             })
             .setOnClick((event)=>{
-                if(this.parent.score<this.cost) return;
-                this.parent.score -= this.cost;
+                if(this.element.score<this.cost) return;
+                if(this.level===this.maxLevel) return;//Upgrade blocked or maxxed
+
+                this.element.score -= this.cost;
                 this.upgrade();
 
                 //Charge cost
-                let system = this.parent.parent.parent;
+                let system = this.element.gameData.system;
                 let particleManager = system.getScene('Main Scene').particleManager;
-                let element = this.parent
+                let element = this.element
 
                 let availableAtoms = particleManager.atoms.filter((atom)=>{
                     return element.symbol===atom.element.symbol;
@@ -173,9 +200,25 @@ class Upgrade {
                 }
                 
                 //Increase cost
-                this.cost = Math.floor(this.cost * this.costMultiplier, this.cost);
+                this.cost = this.getNewCost();//Math.floor(this.cost * this.costMultiplier, this.cost);
+                this.level++;
             });
         scene.addButton(this.button);
+    }
+    setLabels(getLabel, getDescription, getIncrease) {
+        this.getLabel = getLabel;
+        this.getDescription = getDescription;
+        this.getIncrease = getIncrease;
+        return this;
+    }
+    setCostFunction(fn) {
+        this.getNewCost = fn;
+        return this;
+    }
+    setLevels(level,maxLevel) {
+        this.level = level;
+        this.maxLevel = maxLevel;
+        return this;
     }
     setOnUpgrade(fn) {
         this.upgrade = fn;
@@ -184,8 +227,8 @@ class Upgrade {
 }
 //This contains the parameters for an Element's incremental and others
 class Element {
-    constructor(parent, name, symbol, protons, electrons, color) {
-        this.parent = parent;
+    constructor(gameData, name, symbol, protons, electrons, color) {
+        this.gameData = gameData;
 
         this.name = name;
         this.symbol = symbol;
@@ -195,28 +238,117 @@ class Element {
 
         this.score = 0;
         this.increment = 1; // Default increment value
-        this.critChance = 0;
-        this.critMultiplier = 1;
-        this.upgrades = []
+        
+        this.critChance = 0.0;
+        this.critMultiplier = 2;
 
-        this.addUpgrade(
-                new Upgrade(this,'increment', 10, 1.1)
-                    .setOnUpgrade(function(){
-                        this.parent.increment++;
-                    })
-            ).addUpgrade(
-                new Upgrade(this,'crit chance', 25, 1.25)
-                    .setOnUpgrade(function(){
-                        this.parent.critChance+=0.1;
-                    })
-            ).addUpgrade(
-                new Upgrade(this,'crit multiplier', 50, 1.5)
-                    .setOnUpgrade(function(){
-                        this.parent.critMultiplier++;
-                    })
-            );
+        this.spawnTimer = 0;
+        this.maxSpawnTimer = 0;
 
-        let system = this.parent.parent;
+        this.upgrades = [
+            new Upgrade(this, 10 + (this.protons), 0, 100)
+                .setCostFunction(function(){
+                    return Math.floor(this.cost * 1.25);
+                })
+                .setLabels(
+                    function(){
+                        return 'Atomic Click';
+                    },
+                    function(){
+                        return `Clicking creates more atoms.`;
+                    },
+                    function(){
+                        return `${this.element.increment}->${this.element.increment+1}`;
+                    }
+                )
+                .setOnUpgrade(function(){
+                    this.element.increment++;
+                }),
+            new Upgrade(this,25 + (10 * this.protons), 0, 100)
+                .setCostFunction(function(){
+                    return Math.floor(this.cost * 1.5);
+                })
+                .setLabels(
+                    function(){
+                        return 'Probability Cloud';
+                    },
+                    function(){
+                        return `Atoms have a chance to create multiple atoms when merging.`;
+                    },
+                    function(){
+                        return `${Math.floor(this.element.critChance * 100)}%->${Math.floor((this.element.critChance+0.1) * 100)}%`;
+                    }
+                )
+                .setOnUpgrade(function(){
+                    this.element.critChance+=0.1;
+                }),
+            new Upgrade(this,100 + (25 * this.protons), 1, 10)
+                .setCostFunction(function(){
+                    return Math.floor(this.cost * 1.75);
+                })
+                .setLabels(
+                    function(){
+                        return 'Core Density';
+                    },
+                    function(){
+                        return `Critical merges create more atoms.`;
+                    },
+                    function(){
+                        return `${this.element.critMultiplier}->${this.element.critMultiplier+1}`;
+                    }
+                )
+                .setOnUpgrade(function(){
+                    this.element.critMultiplier++;
+                }),
+            new Upgrade(this,100 + (50 * this.protons), 0, 10)
+                .setCostFunction(function(){
+                    return Math.floor(this.cost * 1.9);
+                })
+                .setLabels(
+                    function(){
+                        return 'Particle Generator';
+                    },
+                    function(){
+                        return `Periodically spawn a new atom.`;
+                    },
+                    function(){
+                        if(this.level===0) return '->10s';
+                        return `${this.element.maxSpawnTimer}s->${this.element.maxSpawnTimer-1}s`;
+                    }
+                )
+                .setOnUpgrade(function(){
+                    if(this.level===0) this.element.maxSpawnTimer = 10;
+                    else this.element.maxSpawnTimer--;
+                }),
+            new Upgrade(this,500 + (125 * this.protons), 0, 1)
+                .setCostFunction(function(){
+                    return -1;//one time only
+                })
+                .setLabels(
+                    function(){
+                        return 'Nuclear Fusion';
+                    },
+                    function(){
+                        let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
+                        return `Clicks now spawn ${nextElement.name} atoms.`;
+                    },
+                    function(){
+                        return `${this.level}/${this.maxLevel}`;
+                    }
+                )
+                .setOnUpgrade(function(){
+                    let gameData = this.element.gameData
+                    let currSpawn = gameData.getElement(gameData.spawningElement);
+                    let newSpawn = gameData.getElementByProtons(this.element.protons + 1);
+                    if(currSpawn.protons>=newSpawn.protons) {
+                        //Do nothing, not worth to downgrade the spawning element
+                        return;
+                    }
+                    gameData.spawningElement = newSpawn.symbol;
+                })
+        ]
+
+        let system = this.gameData.system;
         let scene = system.getScene('Main Scene');
         this.shopButton = new Button(`${this.name} Upgrades`, scene)
             .setBounds({
@@ -234,14 +366,14 @@ class Element {
     addUpgrade(upgrade){
         this.upgrades.push(upgrade);
         
-        let system = this.parent.parent;
+        let system = this.gameData.system;
         let scene = system.getScene('Main Scene');
         scene.addButton(upgrade.button);
 
         return this;
     }
     getUpgrade(label) {
-        let upgrade = this.upgrades.find((upgrade)=>{return upgrade.label === label})
+        let upgrade = this.upgrades.find((upgrade)=>{return upgrade.getLabel() === label})
         if(upgrade) {
             return upgrade;
         } else {
@@ -259,37 +391,48 @@ class Element {
     setShopButton(button) {
         this.shopButton = button;
     }
-    drawShopButton(renderer, frameCount){
-        let box = this.shopButton.getBounds();
-                        
-        let gameData = this.parent;
-        let system = gameData.parent;
-        let scene = system.getScene('Main Scene');
-        let index = this.protons - 1;
-
-        let startX = 25;
-        let startY = 50;
-
-        renderer.context.globalAlpha = 0.3;
-        renderer.context.fillStyle = this.color;
-        renderer.context.fillRect(box.x,box.y,box.w,box.h);
-        renderer.context.globalAlpha = 1;
-
-        let atom = new Atom(scene.particleManager, this.protons, this.electrons, this.color, this)
-            .setPosition(startX, startY + 50 * index)
-            .setRadius(5);
-        atom.draw(renderer, frameCount);
-
-        renderer.drawText(startX + 25, startY + 50 * index,`${this.name} Atoms: ${this.getScore()}`, 'white', 15);
-    }
 }
 class ParticleManager {
-    constructor(parent) {
-        this.parent = parent;
+    constructor(scene) {
+        this.scene = scene;
         this.atomIndex = 0;
         this.atoms = [];
     }
     run() {
+        let system = this.scene.system;
+        let deltaTime = 1/system.config.fps;
+        let gameData = system.gameData;
+
+        let spawnElements = gameData.unlockedElements
+            .filter(function(element){
+                return element.maxSpawnTimer>0;
+            })
+        spawnElements.forEach(function(element){
+            element.spawnTimer+=deltaTime;
+            if(element.maxSpawnTimer>element.spawnTimer) return;
+            element.spawnTimer -= element.maxSpawnTimer;
+            let atom = this.addAtom(element,this.scene.getScreen('Simulation Display'));
+
+            let effect = new Effect(system,`Particle Generator ${element.symbol}`)
+                .setTimings(0,30)
+                .setDraw(function(renderer,frameCount){
+                    let lerp = this.currFrame / this.duration;
+                    let radiusLerp = 5 * (1 + 2 * lerp);
+
+                    renderer.context.globalAlpha = Math.sin(Math.PI * lerp);
+                    renderer.context.lineWidth = 3;
+
+                    renderer.strokeCircle(atom.x,atom.y,radiusLerp,'white');
+
+                    renderer.context.lineWidth = 1;
+                    renderer.context.globalAlpha = 1;
+                })
+                .setEnd(function(){
+                    let scene = this.system.getScene('Main Scene');
+                    scene.removeEffect(this.id);
+                })
+            this.scene.addEffect(effect);
+        }.bind(this))
         this.atoms.forEach(function(atom) {
             this.checkCollisions(atom);
             atom.run();
@@ -340,7 +483,7 @@ class ParticleManager {
             let dx = atom1.x - atom2.x;
             let dy = atom1.y - atom2.y;
             let distance = Math.sqrt(dx * dx + dy * dy);
-            let centerDistances = atom1.radius + atom2.radius;
+            let centerDistances = atom1.radius * atom1.getMaxLevel() + atom2.radius * atom2.getMaxLevel();
 
             if (distance <= centerDistances && atom1.protons === atom2.protons && atom1.electrons === atom2.electrons) {
                 let createdAtoms = this.mergeAtoms(atom1,atom2);
@@ -355,11 +498,9 @@ class ParticleManager {
         }.bind(this));
     }
     mergeAtoms(atom1,atom2) {
-        let scene = this.parent;
-        let system = this.parent.parent;
-        let screen = scene.getScreen('Simulation Display');
-        console.log(screen)
-        let gameData = scene.parent.gameData;
+        let system = this.scene.system;
+        let screen = this.scene.getScreen('Simulation Display');
+        let gameData = system.gameData;
 
         let oldElement = gameData.getElementByProtons(atom1.protons);
         let newElement = gameData.getElementByProtons(atom1.protons + 1);
@@ -373,15 +514,15 @@ class ParticleManager {
         }
 
         //Calculate Crits
-        let guaranteedCrits = Math.floor(newElement.critChance);
-        if(Math.random()<(newElement.critChance-guaranteedCrits)) {
-            console.log('hit a crit');
+        let guaranteedCrits = Math.floor(oldElement.critChance);
+        let rndAttempt = Math.random();
+        if(rndAttempt<(oldElement.critChance-guaranteedCrits)) {
             guaranteedCrits++;
         }
 
         let baseMultiplier = 1;
         for(let i=0;i<guaranteedCrits;i++) {
-            baseMultiplier *= newElement.critMultiplier;
+            baseMultiplier *= oldElement.critMultiplier;
         }
         let finalMultiplier = Math.floor(baseMultiplier);
         
@@ -390,9 +531,9 @@ class ParticleManager {
         this.atoms.splice(this.atoms.indexOf(atom2), 1);
         oldElement.incrementScore(-2);
         
+        newElement.incrementScore(finalMultiplier);
         let newAtoms = [];
         for(let i=0;i<finalMultiplier;i++) {
-            newElement.incrementScore(1);
 
             let bounds = screen.getBounds();
             let offsetPosition = {
@@ -416,8 +557,73 @@ class ParticleManager {
                     (atom1.vy + atom2.vy) / 2
                 );
             newAtoms.push(newAtom);
+
+            this.addMergeEffects(newAtom,newElement, i);
         }
         return newAtoms;
+    }
+    addMergeEffects(newAtom,newElement, i) {
+        let scene = this.scene;
+        let baseEffect = new Effect(this.scene.system,`Spawn ${newElement.symbol} ${i}`)
+            .setTimings(0,30)
+            .setDraw(function(renderer,frameCount){
+                let lerp = this.currFrame / this.duration;
+                let radiusLerp = newAtom.radius * newAtom.getMaxLevel() * (1 + 2 * lerp);
+
+                renderer.context.globalAlpha = Math.sin(Math.PI * lerp);
+                renderer.context.lineWidth = 3;
+
+                renderer.strokeCircle(newAtom.x,newAtom.y,radiusLerp,'white');
+
+                renderer.context.lineWidth = 1;
+                renderer.context.globalAlpha = 1;
+            })
+            .setEnd(function(){
+                scene.removeEffect(this.id);
+            })
+        let critEffect = new Effect(this.scene.system,`Crit Spawn ${newElement.symbol} ${i}`)
+            .setTimings(0,30)
+            .setDraw(function(renderer,frameCount){
+                let lineCount = 16;
+                let lerp = this.currFrame / this.duration;
+                let radius = newAtom.radius * newAtom.getMaxLevel();
+                let center = {
+                    x: newAtom.x,
+                    y: newAtom.y
+                };
+
+                for(let i=0;i<lineCount;i++) {
+                    let rndAngle = 2 * Math.PI * Math.random();
+                    let rndLength = radius * (0.5 + Math.random());
+                    let rndStart = {
+                        x: newAtom.x + (2 * radius) * Math.cos(rndAngle),
+                        y: newAtom.y + (2 * radius) * Math.sin(rndAngle)
+                    }
+                    let rndOffset = {
+                        x: (2 * Math.sin(Math.PI * lerp)) * rndLength * Math.cos(rndAngle),
+                        y: (2 * Math.sin(Math.PI * lerp)) * rndLength * Math.sin(rndAngle)
+                    }
+                    
+                    renderer.context.globalAlpha = 1-lerp;
+
+                    renderer.fillLine(
+                        rndStart.x,
+                        rndStart.y,
+                        rndStart.x + rndOffset.x,
+                        rndStart.y + rndOffset.y,
+                        'white',
+                        1
+                    );
+
+                    renderer.context.globalAlpha = 1;
+                }
+            })
+            .setEnd(function(){
+                scene.removeEffect(this.id);
+            })
+        
+        if(i===0) this.scene.addEffect(baseEffect);
+        else this.scene.addEffect(critEffect);
     }
 }
 //This is meant to be used as a generic region collider for the mouse, the renderer's function is simply a helper
@@ -465,13 +671,45 @@ class Button {
         return this.active;
     }
 }
+class Screen {
+    constructor(scene, label) {
+        this.label = label;
+        this.scene = scene;
+        let renderer = scene.system.renderer;
+        this.x = 0;
+        this.y = 0;
+        this.width = renderer.width;
+        this.height = renderer.height;
+        this.drawIndex = 0;
+        this.draw = function(){};
+    }
+    getBounds() {
+        return {
+            x: this.x,
+            y: this.y,
+            w: this.width,
+            h: this.height
+        };
+    }
+    setBounds(bounds) {
+        this.x = bounds.x;
+        this.y = bounds.y;
+        this.width = bounds.w;
+        this.height = bounds.h;
+        return this;
+    }
+    setDraw(fn) {
+        this.draw = fn;
+        return this;
+    }
+}
 class Scene {
     constructor(label, parent) {
-        this.parent = parent;
+        this.system = parent;
         this.label = label;
         
         this.frameCount = 0;
-        let renderer = this.parent.renderer;
+        let renderer = this.system.renderer;
         this.width = renderer.width;
         this.height = renderer.height;
         
@@ -479,12 +717,14 @@ class Scene {
         this.screens = [];
         this.buttonIndex = 0;
         this.buttons = [];
+        this.effectIndex = 0;
+        this.effects = [];
         this.particleManager = new ParticleManager(this);
 
-        this.init = function(){};
+        this.start = function(){};
         this.run = function(){};
         this.draw = function() {
-            let renderer = this.parent.renderer;
+            let renderer = this.system.renderer;
             let frameCount = this.frameCount;
             this.screens.forEach(function(screen) {
                 screen.draw(renderer, frameCount);
@@ -492,11 +732,15 @@ class Scene {
             this.buttons.forEach(function(button) {
                 button.draw(renderer, frameCount);
             })
+            this.effects.forEach(function(effect) {
+                if(effect.getState()==='idle') return;
+                effect.draw(renderer, frameCount);
+            })
         };
-        this.clean = function(){};
+        this.end = function(){};
     }
-    setInit(fn) {
-        this.init = fn;
+    setStart(fn) {
+        this.start = fn;
         return this;
     }
     setRun(fn) {
@@ -507,8 +751,8 @@ class Scene {
         this.draw = fn;
         return this;
     }
-    setClean(fn) {
-        this.clean = fn;
+    setEnd(fn) {
+        this.end = fn;
         return this;
     }
     addScreen(screen, drawIndex = undefined) {
@@ -530,7 +774,7 @@ class Scene {
         }
     }
     addAtom(symbol, screenLabel) {
-        let gameData = this.parent.gameData;
+        let gameData = this.system.gameData;
 
         let screen = this.screens.find((screen)=>{return screen.label === screenLabel});
         let elementData = gameData.getElement(symbol);
@@ -550,17 +794,6 @@ class Scene {
 
         return this;
     }
-    removeButton(label) {
-        let button = this.buttons.find((button)=>{return button.label===label});
-        if (button) {
-            let index = this.buttons.indexOf(button);
-            this.buttons.splice(index,1);
-            return true;
-        } else {
-            console.warn(`Button ${label} not found in scene ${this.label}.`);
-            return false;
-        }
-    }
     getButton(label) {
         let button = this.buttons.find((button)=>{return button.label===label});
         if (button) {
@@ -570,6 +803,120 @@ class Scene {
             return null;
         }
     }
+    removeButton(label) {
+        let button = this.getButton(label);
+        if (button) {
+            let index = this.buttons.indexOf(button);
+            this.buttons.splice(index,1);
+            return true;
+        } else {
+            console.warn(`Button ${label} not found in scene ${this.label}.`);
+            return false;
+        }
+    }
+    addEffect(effect, effectIndex = undefined) {
+        effect.parent = this;
+        effect.id = effectIndex || this.effectIndex;
+        this.effects.push(effect);
+        this.effects.sort((a, b) => a.id - b.id);
+        this.effectIndex++;
+
+        return this;
+    }
+    getEffect(id) {
+        let effect = this.effects.find((effect)=>{return effect.id===id});
+        if (effect) {
+            return effect;
+        } else {
+            console.warn(`Effect ${id} not found in scene ${this.label}.`);
+            return null;
+        }
+    }
+    removeEffect(id) {
+        let effect = this.getEffect(id);
+        if (effect) {
+            let index = this.effects.indexOf(effect);
+            this.effects.splice(index,1);
+            return true;
+        } else {
+            console.warn(`Effect ${id} not found in scene ${this.label}.`);
+            return false;
+        }
+    }
+    handleEvents() {
+        let events = this.system.eventBuffer;
+        events.forEach(function(event) {
+            console.log(event)
+            if (event.type === 'click') {
+                // Check if mouse position is within the bounds of any button
+                let clicked = false;
+                this.buttons.forEach(function(button) {
+                    let bounds = button.getBounds();
+                    let mousePosition = this.system.mousePosition;
+
+                    if(mousePosition.x < bounds.x) return;
+                    if(mousePosition.y < bounds.y) return;
+                    if(mousePosition.x > bounds.x + bounds.w) return;
+                    if(mousePosition.y > bounds.y + bounds.h) return;
+
+                    if(clicked) return;//Already processed
+                    if(button.getActive()===false) return;
+
+                    button.onClick();
+                    clicked = true;  
+                    this.system.eventBuffer.shift();
+                    return;
+                }.bind(this));
+            }
+            if(event.type === 'scroll') {
+                let bounds = this.getScreen('Main UI').getBounds();
+                let mousePosition = this.system.mousePosition;
+
+                if(mousePosition.x < bounds.x) return;
+                if(mousePosition.y < bounds.y) return;
+                if(mousePosition.x > bounds.x + bounds.w) return;
+                if(mousePosition.y > bounds.y + bounds.h) return;
+
+                let menuOffset = this.system.shopListOffset;
+                let scrollDirection = Math.sign(event.deltaY);
+                let shopCount = this.system.gameData.unlockedElements.length;
+                
+                console.log(menuOffset, scrollDirection, shopCount);
+
+                if(menuOffset + scrollDirection < 0 || menuOffset + scrollDirection >= (shopCount)) {
+                    //Do nothing, limit at edges
+                    return;
+                }
+                this.system.shopListOffset += scrollDirection;
+                this.system.eventBuffer.shift();
+                return;
+            }
+        }.bind(this));
+    }
+    handleEffects() {
+        this.effects.forEach(function(effect,index){
+            let state = effect.getState();
+            switch(state) {
+                case 'idle':
+                    break;
+                case 'countdown':
+                    effect.countdown--;
+                    break;
+                case 'starting':
+                    effect.start();
+                    effect.currFrame++;
+                    break;
+                case 'running':
+                    effect.run(this.frameCount);
+                    effect.currFrame++;
+                    break;
+                case 'ending':
+                    effect.end();
+                    effect.duration = 0;
+                    break;
+            }
+        }.bind(this))
+    }
 }
 class Config {
     setFPS(fps) {
@@ -578,8 +925,8 @@ class Config {
     }
 }
 class GameData {
-    constructor(parent) {
-        this.parent = parent;
+    constructor(system) {
+        this.system = system;
         this.elements = [
             new Element(this, 'Hydrogen', 'H', 1, 1, 'hsl(210, 100%, 50%)'),
             new Element(this, 'Helium', 'He', 2, 2, 'hsl(30, 100%, 50%)'),
@@ -661,62 +1008,22 @@ class Renderer {
         if (this.context===undefined) return;
         this.context.fillStyle = color;
         this.context.font = fontSize + 'px monospace';
-        let textHeight = this.context.measureText(text).actualBoundingBoxAscent;
+        let textDimensions = this.context.measureText(text);
+        let textHeight = textDimensions.actualBoundingBoxAscent;
+        let textWidth = textDimensions.width;
         //Canvas draw at baseline, so we need to adjust y position
         this.context.fillText(text, x, y + textHeight / 2);
+        return textWidth
     }
-    drawButton(x, y, width, height, text, linesAllowed = 1) {
+    fillLine(x1,y1,x2,y2,color,width = 1) {
+        this.context.lineWidth = width;
+        this.context.strokeStyle = color;
 
-        if (this.context===undefined) return;
-        this.context.fillStyle = 'white';
-        this.context.fillRect(x, y, width, height);
-        this.context.fillStyle = 'black';
-
-        //"Bloat" width to wrap text better
-        let textPadScale = 1.25;
-        width /= textPadScale;
+        this.context.moveTo(x1,y1);
+        this.context.lineTo(x2,y2);
+        this.context.stroke();
         
-        // Word wrap: split text into lines that fit the button width
-        let words = text.split(' ');
-        let lines = [];
-        let currentLine = '';
-
-        let charsPerLine = text.length / linesAllowed;
-        let textFontSizeW = width / charsPerLine;
-        let textFontSizeH = height / linesAllowed;
-
-        let testFontSize = Math.min(textFontSizeW,textFontSizeH);
-        this.context.font = testFontSize + 'px monospace';
-        for (let i = 0; i < words.length; i++) {
-            let testLine = currentLine ? currentLine + ' ' + words[i] : words[i];
-            let testWidth = this.context.measureText(testLine).width;
-            if (testWidth > width && currentLine) {
-                lines.push(currentLine);
-                currentLine = words[i];
-            } else {
-                currentLine = testLine;
-            }
-        }
-        if (currentLine) lines.push(currentLine);
-        // If too many lines, merge extras into last line
-        if (lines.length > linesAllowed) {
-            let merged = lines.slice(linesAllowed - 1).join(' ');
-            lines = lines.slice(0, linesAllowed - 1);
-            lines.push(merged);
-        }
-        let fontSize = testFontSize;
-
-        //"Unbloat" width
-        width *= textPadScale;
-
-        // Center each line
-        for (let i = 0; i < lines.length; i++) {
-            let line = lines[i];
-            let textWidth = this.context.measureText(line).width;
-            let textX = x + (width - textWidth) / 2;
-            let textY = y + fontSize + i * fontSize + (height - fontSize * lines.length) / 2;
-            this.context.fillText(line, textX, textY);
-        }
+        this.context.lineWidth = 1;
     }
     fillCircle(x, y, radius, color = 'white') {
         if (this.context===undefined) return;
@@ -790,10 +1097,11 @@ class System {
         this.gameData;
 
         this.shopElement = null;
+        this.shopListOffset = 0;
     }
-    initListeners() {
+    startListeners() {
         //Set listeners
-        document.addEventListener('click', function(event) {
+        document.addEventListener('mouseup', function(event) {
             if(event.target !== this.renderer.canvas) return;
             this.eventBuffer.push({
                 type: 'click'
@@ -806,6 +1114,12 @@ class System {
             let dy = event.clientY - canvasPosition.top;
             this.mousePosition.x = dx;
             this.mousePosition.y = dy;
+        }.bind(this));
+        document.addEventListener('wheel',function(event){
+            this.eventBuffer.push({
+                deltaY: event.deltaY,
+                type: 'scroll'
+            });
         }.bind(this));
     }
     setRenderer(renderer) {
@@ -848,8 +1162,8 @@ class System {
 }
 
 const system = new System();
-initSys()
-function initSys() {
+startSys()
+function startSys() {
     //Configure everything the system needs
     /*
     Setting system's config before or after altering the main
@@ -864,7 +1178,7 @@ function initSys() {
     const gameData = new GameData(system);
     system.setGameData(gameData);
 
-    system.initListeners();
+    system.startListeners();
     
     const newAtomButton = new Button('New Atom', scene1)
         .setBounds({
@@ -880,6 +1194,29 @@ function initSys() {
             for(let i=0;i<element.increment;i++) {
                 scene.particleManager.addAtom(element,scene.getScreen('Simulation Display'));
             }
+
+            let position = {
+                x: system.mousePosition.x,
+                y: system.mousePosition.y
+            }
+            let effect = new Effect(system,`Click`)
+                .setTimings(0,10)
+                .setDraw(function(renderer,frameCount){
+                    let lerp = this.currFrame / this.duration;
+                    let radiusLerp = 5 * (1 + 2 * lerp);
+
+                    renderer.context.globalAlpha = Math.sin(Math.PI * lerp);
+                    renderer.context.lineWidth = 3;
+
+                    renderer.strokeCircle(position.x,position.y,radiusLerp,'white');
+
+                    renderer.context.lineWidth = 1;
+                    renderer.context.globalAlpha = 1;
+                })
+                .setEnd(function(){
+                    scene.removeEffect(this.id);
+                })
+            scene.addEffect(effect);
         })
         .setDraw(function(renderer, frameCount) {
             return;
@@ -913,42 +1250,22 @@ function initSys() {
         });
     scene1.addButton(closeShopButton);
 
-    scene1.setInit(function() {
+    scene1
+        .setStart(function() {
             this.run();
         })
         .setRun(function() {
             this.frameCount++;
             this.particleManager.run();
 
-            let events = this.parent.eventBuffer;
-            events.forEach(function(event) {
-                if (event.type === 'click') {
-                    // Check if mouse position is within the bounds of any button
-                    let clicked = false;
-                    this.buttons.forEach(function(button) {
-                        let bounds = button.getBounds();
-                        let mousePosition = this.parent.mousePosition
-                        if(mousePosition.x < bounds.x) return;
-                        if(mousePosition.y < bounds.y) return;
-                        if(mousePosition.x > bounds.x + bounds.w) return;
-                        if(mousePosition.y > bounds.y + bounds.h) return;
-                        if(clicked) return;//Already processed
-                        if(button.getActive()===false) return;
-                        button.onClick();
-                        clicked = true;                   
-                    }.bind(this));
-                }
-                this.parent.eventBuffer.shift(); // Clear processed events
-            }.bind(this));
-
+            this.handleEvents();
+            this.handleEffects();
             this.draw();
 
             setTimeout(this.run.bind(this), 1000/config.fps);
         })
-        .setClean(function() {
-        })
         
-        const simulationDisplay = new Screen('Simulation Display', scene1)
+        const simulationDisplay = new Screen(scene1, 'Simulation Display')
             .setBounds({
                 x: 0.25 * renderer.width,
                 y: 0,
@@ -959,11 +1276,11 @@ function initSys() {
                 let box = this.getBounds();
 
                 renderer.clearBackground('black');
-                let scene = this.parent;
+                let scene = this.scene;
 
-                scene.particleManager.draw(renderer, this.parent.frameCount);
+                scene.particleManager.draw(renderer, scene.frameCount);
             })
-        const mainUI = new Screen('Main UI', scene1)
+        const mainUI = new Screen(scene1, 'Main UI')
             .setBounds({
                 x: 0,
                 y: 0,
@@ -977,14 +1294,34 @@ function initSys() {
                 renderer.context.fillStyle = 'rgba(255, 255, 255, 0.1)';
                 renderer.context.fillRect(box.x, box.y, box.w, box.h);
                 
-                let gameData = this.parent.parent.gameData;
+                let gameData = this.scene.system.gameData;
 
-                let displayElements = gameData.getUnlockedElements();
+                //Get unlocked elements, and show starting at the general menu position
+                let displayElements = gameData.getUnlockedElements().slice(system.shopListOffset);
+
                 displayElements.forEach(function(element, index) {
-                    element.drawShopButton(renderer,frameCount);
+                    let box = element.shopButton.getBounds();
+                                    
+                    let system = element.gameData.system;
+                    let scene = system.getScene('Main Scene');
+
+                    let startX = 25;
+                    let startY = 50;
+
+                    renderer.context.globalAlpha = 0.3;
+                    renderer.context.fillStyle = element.color;
+                    renderer.context.fillRect(box.x,box.y,box.w,box.h);
+                    renderer.context.globalAlpha = 1;
+
+                    let atom = new Atom(scene.particleManager, element.protons, element.electrons, element.color, element)
+                        .setPosition(startX, startY + 50 * index)
+                        .setRadius(5);
+                    atom.draw(renderer, frameCount);
+
+                    renderer.drawText(startX + 25, startY + 50 * index,`${element.name} Atoms: ${element.getScore()}`, 'white', 15);
                 })
             })
-        const shopUI = new Screen('Shop UI',scene1)
+        const shopUI = new Screen(scene1, 'Shop UI')
             .setBounds({
                 x: 0,
                 y: 0,
@@ -996,6 +1333,7 @@ function initSys() {
                     return;
                 }
 
+                //Reactive upgrade buttons
                 let box = this.getBounds();
                 let element = system.gameData.getElement(system.shopElement);
                 let upgrades = element.upgrades;
@@ -1003,36 +1341,116 @@ function initSys() {
                     upgrade.button.setActive(true);
                 })
                 
-                
                 //Draw Background
                 renderer.context.globalAlpha = 0.1;
                 renderer.context.fillStyle = element.color;
                 renderer.context.fillRect(box.x, box.y, box.w, box.h);
                 renderer.context.globalAlpha = 1;
 
-                //Title (Close button is drawn separately)
-                renderer.drawText(20,20,`${element.name} Shop (${element.score} points)`,'white',20);
+                //Helper vars
+                let shift = 0;
+                let drawX = 20;
+                let drawY = 20;
+                let lineHeight = 30;
+
+                let jumpLine = ()=>{drawY += lineHeight}
+                let shiftLine = ()=>{drawX += shift}
+                let unshiftLine = ()=>{drawX -= shift}
                 
+                let restartX = ()=>{drawX = 20}
+                let restartY = ()=>{drawY = 20}
+                
+                //Draw Menu
+                renderer.drawText(drawX,drawY,`${element.name} Shop`,'white',20);
+                jumpLine();
 
+                let particleManager = system.getScene('Main Scene').particleManager;
+                let atom = new Atom(particleManager, element.protons, element.electrons, element.color, element);
+                
+                shift = renderer.drawText(drawX,drawY,`Points: ${element.score}`,'white',17);
+                shift += 10 * atom.getMaxLevel();
+                shiftLine();
+                
+                atom.setPosition(drawX, drawY)
+                    .setRadius(5)
+                    .draw(renderer, frameCount);
+
+                unshiftLine();
+
+                //Draw Upgrade List
                 upgrades.forEach((upgrade,index)=>{
-                    let textDimensions = renderer.context.measureText(upgrade.label);
+                    renderer.context.font = '20px monospace';
+                    let textDimensions = renderer.context.measureText(upgrade.getLabel());
+                    let textWidth = textDimensions.width;
+                    let heightOffset = textDimensions.actualBoundingBoxAscent/2;
 
+                    jumpLine();
+
+                    let padding = {
+                        x: 5,
+                        y: 5,
+                        w: 10,
+                        h: 5
+                    }
                     let button = upgrade.button
                         .setBounds({
-                            x: 20,
-                            y: 60 + (40 * index),
-                            w: textDimensions.width,
-                            h: 20
+                            x: drawX - padding.x,
+                            y: drawY - padding.y,
+                            w: textWidth + padding.w,
+                            h: 20 + padding.h
                         })
                     let buttonBounds = button.getBounds();
                     
-                    //Draw Outline and Text
+                    //Draw Outline and Title
                     renderer.context.globalAlpha = 0.2;
                     renderer.context.fillStyle = '#fff';
                     renderer.context.fillRect(buttonBounds.x, buttonBounds.y, buttonBounds.w, buttonBounds.h);
                     renderer.context.globalAlpha = 1;
                     
-                    renderer.drawText(buttonBounds.x,buttonBounds.y + textDimensions.actualBoundingBoxAscent/2,`${upgrade.label} : ${upgrade.cost}`,'white',20);
+                    if(element.score<upgrade.cost || upgrade.level === upgrade.maxLevel) {
+                        renderer.context.globalAlpha = 0.5;
+                    }
+                    let costDisplay = `${upgrade.cost} (${upgrade.getIncrease()})`;
+                    if(upgrade.level === upgrade.maxLevel) costDisplay = 'Max';
+                    shift = renderer.drawText(
+                        buttonBounds.x + padding.x,
+                        buttonBounds.y + padding.y + heightOffset,
+                        `${upgrade.getLabel()} : ${costDisplay}`,
+                        'white',
+                        20
+                    );
+                    shift += 10 * atom.getMaxLevel();
+                    
+                    shiftLine();
+                    atom.setPosition(drawX,drawY + heightOffset)
+                        .draw(renderer,frameCount);
+                    unshiftLine();
+                    
+                    //Write description
+                    jumpLine();
+                    let descriptionsWords = upgrade.getDescription().split(' ');
+                    let maxDescriptionWidth = 250;
+                    descriptionsWords.forEach(function(word){
+                        if(maxDescriptionWidth < drawX) {
+                            jumpLine();
+                            restartX();
+                            shift = 0;
+                        }
+                        renderer.context.font = '17px monospace';
+                        shift = renderer.drawText(
+                            drawX,
+                            drawY + heightOffset,
+                            word + ' ',
+                            'white',
+                            17
+                        );
+                        shiftLine();
+                    })
+                    jumpLine();
+                    restartX();
+                    shift = 0;
+                    
+                    renderer.context.globalAlpha = 1;
                 })
             })
 
@@ -1041,5 +1459,5 @@ function initSys() {
         scene1.addScreen(shopUI);
 
     // Run the first scene
-    system.scenes[0].init();
+    system.getScene('Main Scene').start();
 }
