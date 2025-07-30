@@ -76,7 +76,7 @@ class Atom {
         this.protons = protons;
         this.electrons = electrons;
         this.color = color;
-        this.radius = 3;
+        this.radius = 4;
         this.screen = screen;
         
         let system = this.particleManager.scene.system;
@@ -141,18 +141,30 @@ class Atom {
         return this;
     }
     draw(renderer, frameCount = undefined) {
-        let angleOffset = frameCount ? frameCount * 0.01 : 0;
-        renderer.drawAtom(
-            this.getMaxProtons,
-            this.getMaxElectrons,
-            this.x,
-            this.y,
-            this.radius,
-            this.protons,
-            this.electrons,
-            angleOffset + (this.angle || 0),
-            this.color
-        );
+        let renderType = this.particleManager.scene.renderType;
+        switch(renderType) {
+            case 'Default':
+                let angleOffset = frameCount ? frameCount * 0.01 : 0;
+                renderer.drawAtom(
+                    this.getMaxProtons,
+                    this.getMaxElectrons,
+                    this.x,
+                    this.y,
+                    this.radius,
+                    this.protons,
+                    this.electrons,
+                    angleOffset + (this.angle || 0),
+                    this.color
+                );
+                break;
+            case 'Minimal':
+                renderer.fillCircle(
+                    this.x,
+                    this.y,
+                    this.radius * this.getMaxLevel(),
+                    this.color
+                )
+        }
     }
 }
 //This is an instance of the various upgrades an element can have
@@ -161,7 +173,7 @@ class Upgrade {
         this.element = element;
 
         this.cost = cost;
-        this.level = 0;
+        this.level = level;
         this.maxLevel = maxLevel;
 
         this.upgrade = function(){};
@@ -172,7 +184,7 @@ class Upgrade {
 
         let system = this.element.gameData.system;
         let scene = system.getScene('Main Scene');
-        this.button = new Button(`${this.label} ${this.element.symbol}`,this)
+        this.button = new Button(`${this.getLabel()} ${this.element.symbol}`,'click', this)
             .setBounds({
                 x: 0,
                 y: 0,
@@ -264,7 +276,7 @@ class Element {
                 .setOnUpgrade(function(){
                     this.element.increment++;
                 }),
-            new Upgrade(this,25 + (10 * this.protons), 0, 100)
+            new Upgrade(this,20 + (10 * this.protons), 0, 100)
                 .setCostFunction(function(){
                     return Math.floor(this.cost * 1.5);
                 })
@@ -282,7 +294,7 @@ class Element {
                 .setOnUpgrade(function(){
                     this.element.critChance+=0.1;
                 }),
-            new Upgrade(this,100 + (25 * this.protons), 1, 10)
+            new Upgrade(this,30 + (10 * this.protons), 1, 10)
                 .setCostFunction(function(){
                     return Math.floor(this.cost * 1.75);
                 })
@@ -300,7 +312,7 @@ class Element {
                 .setOnUpgrade(function(){
                     this.element.critMultiplier++;
                 }),
-            new Upgrade(this,100 + (50 * this.protons), 0, 10)
+            new Upgrade(this,40 + (10 * this.protons), 0, 10)
                 .setCostFunction(function(){
                     return Math.floor(this.cost * 1.9);
                 })
@@ -320,7 +332,7 @@ class Element {
                     if(this.level===0) this.element.maxSpawnTimer = 10;
                     else this.element.maxSpawnTimer--;
                 }),
-            new Upgrade(this,500 + (125 * this.protons), 0, 1)
+            new Upgrade(this,100 + (10 * this.protons), 0, 1)
                 .setCostFunction(function(){
                     return -1;//one time only
                 })
@@ -330,32 +342,37 @@ class Element {
                     },
                     function(){
                         let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
+                        if(!nextElement) return ''
+
                         return `Clicks now spawn ${nextElement.name} atoms.`;
                     },
                     function(){
+                        let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
+                        if(!nextElement) return '';
+
                         return `${this.level}/${this.maxLevel}`;
                     }
                 )
                 .setOnUpgrade(function(){
-                    let gameData = this.element.gameData
-                    let currSpawn = gameData.getElement(gameData.spawningElement);
-                    let newSpawn = gameData.getElementByProtons(this.element.protons + 1);
-                    if(currSpawn.protons>=newSpawn.protons) {
+                    let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
+                    if(!nextElement) return '';
+                    
+                    if(currSpawn.protons>=nextElement.protons) {
                         //Do nothing, not worth to downgrade the spawning element
-                        return;
+                        return '';
                     }
-                    gameData.spawningElement = newSpawn.symbol;
+                    this.element.gameData.spawningElement = nextElement.symbol;
                 })
         ]
 
         let system = this.gameData.system;
         let scene = system.getScene('Main Scene');
-        this.shopButton = new Button(`${this.name} Upgrades`, scene)
+        this.shopButton = new Button(`${this.name} Upgrades`, 'click', scene)
             .setBounds({
-                x: 25-15,
-                y: 50-15,
-                w: 30,
-                h: 30
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0
             })
             .setOnClick(function(event) {
                 if(system.shopElement !== null) return;
@@ -506,7 +523,7 @@ class ParticleManager {
         let newElement = gameData.getElementByProtons(atom1.protons + 1);
         if (!newElement) {
             console.warn(`Element with ${atom1.protons + 1} protons not found in game data.`);
-            return;
+            return [];
         }
 
         if(!gameData.unlockedElements.includes(newElement)) {
@@ -628,7 +645,7 @@ class ParticleManager {
 }
 //This is meant to be used as a generic region collider for the mouse, the renderer's function is simply a helper
 class Button {
-    constructor(label, parent, x = undefined, y = undefined, width = undefined, height = undefined) {
+    constructor(label, type, parent, x = undefined, y = undefined, width = undefined, height = undefined) {
         this.label = label;
         this.parent = parent;
         this.x = x;
@@ -636,6 +653,7 @@ class Button {
         this.width = width;
         this.height = height;
         this.active = true;
+        this.type = type;
 
         this.onClick = function() {};
         this.draw = function() {};
@@ -731,13 +749,22 @@ class Scene {
             });
             this.buttons.forEach(function(button) {
                 button.draw(renderer, frameCount);
-            })
-            this.effects.forEach(function(effect) {
-                if(effect.getState()==='idle') return;
-                effect.draw(renderer, frameCount);
-            })
+            });
+            if(this.renderType!=='Minimal') {
+                this.effects.forEach(function(effect) {
+                    if(effect.getState()==='idle') return;
+                    effect.draw(renderer, frameCount);
+                });
+            }
         };
         this.end = function(){};
+
+        /*
+        Render Types:
+        - Default: Draws Protons, Electrons, Orbit, Spawn and Crit Effects
+        - Minimal: Draw Nucleus only
+        */
+        this.renderType = 'Default';
     }
     setStart(fn) {
         this.start = fn;
@@ -846,51 +873,26 @@ class Scene {
     handleEvents() {
         let events = this.system.eventBuffer;
         events.forEach(function(event) {
-            console.log(event)
-            if (event.type === 'click') {
-                // Check if mouse position is within the bounds of any button
-                let clicked = false;
-                this.buttons.forEach(function(button) {
-                    let bounds = button.getBounds();
-                    let mousePosition = this.system.mousePosition;
-
-                    if(mousePosition.x < bounds.x) return;
-                    if(mousePosition.y < bounds.y) return;
-                    if(mousePosition.x > bounds.x + bounds.w) return;
-                    if(mousePosition.y > bounds.y + bounds.h) return;
-
-                    if(clicked) return;//Already processed
-                    if(button.getActive()===false) return;
-
-                    button.onClick();
-                    clicked = true;  
-                    this.system.eventBuffer.shift();
-                    return;
-                }.bind(this));
-            }
-            if(event.type === 'scroll') {
-                let bounds = this.getScreen('Main UI').getBounds();
+            // Check if mouse position is within the bounds of any button
+            let clicked = false;
+            this.buttons.forEach(function(button) {
+                let bounds = button.getBounds();
                 let mousePosition = this.system.mousePosition;
+                this.system.eventBuffer.shift();
 
                 if(mousePosition.x < bounds.x) return;
                 if(mousePosition.y < bounds.y) return;
                 if(mousePosition.x > bounds.x + bounds.w) return;
                 if(mousePosition.y > bounds.y + bounds.h) return;
 
-                let menuOffset = this.system.shopListOffset;
-                let scrollDirection = Math.sign(event.deltaY);
-                let shopCount = this.system.gameData.unlockedElements.length;
-                
-                console.log(menuOffset, scrollDirection, shopCount);
+                if(clicked) return;//Already processed
+                if(button.getActive()===false) return;
+                if(button.type!==event.type) return;
 
-                if(menuOffset + scrollDirection < 0 || menuOffset + scrollDirection >= (shopCount)) {
-                    //Do nothing, limit at edges
-                    return;
-                }
-                this.system.shopListOffset += scrollDirection;
-                this.system.eventBuffer.shift();
+                button.onClick(event);
+                clicked = true;
                 return;
-            }
+            }.bind(this));
         }.bind(this));
     }
     handleEffects() {
@@ -917,6 +919,9 @@ class Scene {
             }
         }.bind(this))
     }
+    setRenderType(renderType) {
+        this.renderType = renderType;
+    }
 }
 class Config {
     setFPS(fps) {
@@ -929,15 +934,23 @@ class GameData {
         this.system = system;
         this.elements = [
             new Element(this, 'Hydrogen', 'H', 1, 1, 'hsl(210, 100%, 50%)'),
-            new Element(this, 'Helium', 'He', 2, 2, 'hsl(30, 100%, 50%)'),
+            new Element(this, 'Helium', 'He', 2, 2, 'hsl(40, 100%, 50%)'),
             new Element(this, 'Lithium', 'Li', 3, 3, 'hsl(270, 100%, 50%)'),
-            new Element(this, 'Beryllium', 'Be', 4, 4, 'hsl(0, 100%, 75%)'),
+            new Element(this, 'Beryllium', 'Be', 4, 4, 'hsl(20, 100%, 75%)'),
             new Element(this, 'Boron', 'B', 5, 5, 'hsl(180, 100%, 30%)'),
             new Element(this, 'Carbon', 'C', 6, 6, 'hsl(0, 0%, 50%)'),
             new Element(this, 'Nitrogen', 'N', 7, 7, 'hsl(0, 100%, 50%)'),
             new Element(this, 'Oxygen', 'O', 8, 8, 'hsl(180, 50%, 75%)'),
-            new Element(this, 'Fluorine', 'F', 9, 9, 'hsl(60, 100%, 50%)'),
-            new Element(this, 'Neon', 'Ne', 10, 10, 'hsl(240, 100%, 75%)'),
+            new Element(this, 'Fluorine', 'F', 9, 9, 'hsl(70, 100%, 50%)'),
+            new Element(this, 'Neon', 'Ne', 10, 10, 'hsl(310, 100%, 50%)'),
+            new Element(this, 'Sodium', 'Na', 11, 11, 'hsl(30, 100%, 50%)'),
+            new Element(this, 'Magnesium', 'Mg', 12, 12, 'hsl(240, 100%, 75%)'),
+            new Element(this, 'Aluminum', 'Al', 13, 13, 'hsl(140, 25%, 50%)'),
+            new Element(this, 'Silicon', 'Si', 14, 14, 'hsl(120, 0%, 50%)'),
+            new Element(this, 'Phosphorus', 'P', 15, 15, 'hsl(250, 25%, 50%)'),
+            new Element(this, 'Sulfur', 'S', 16, 16, 'hsl(60, 100%, 75%)'),
+            new Element(this, 'Chlorine', 'Cl', 17, 17, 'hsl(90, 50%, 50%)'),
+            new Element(this, 'Argonium', 'Ar', 18, 18, 'hsl(0, 75%, 25%)'),
         ]
         this.spawningElement = 'H';
         this.currRecordScore = 0;
@@ -960,7 +973,7 @@ class GameData {
         if (element) {
             return element;
         } else {
-            console.warn(`Element ${symbol} not found in game data.`);
+            //console.warn(`Element ${symbol} not found in game data.`);
             return null;
         }
     }
@@ -969,7 +982,7 @@ class GameData {
         if (element) {
             return element;
         } else {
-            console.warn(`Element with ${protons} protons not found in game data.`);
+            //console.warn(`Element with ${protons} protons not found in game data.`);
             return null;
         }
     }
@@ -1180,75 +1193,122 @@ function startSys() {
 
     system.startListeners();
     
-    const newAtomButton = new Button('New Atom', scene1)
-        .setBounds({
-            x: 0.25 * system.renderer.width,
-            y: 0,
-            w: 0.75 * system.renderer.width,
-            h: system.renderer.height
-        })
-        .setOnClick(function(event) {
-            let element = system.gameData.getElement(system.gameData.spawningElement);            
-            let scene = system.getScene('Main Scene');
-            
-            for(let i=0;i<element.increment;i++) {
-                scene.particleManager.addAtom(element,scene.getScreen('Simulation Display'));
-            }
-
-            let position = {
-                x: system.mousePosition.x,
-                y: system.mousePosition.y
-            }
-            let effect = new Effect(system,`Click`)
-                .setTimings(0,10)
-                .setDraw(function(renderer,frameCount){
-                    let lerp = this.currFrame / this.duration;
-                    let radiusLerp = 5 * (1 + 2 * lerp);
-
-                    renderer.context.globalAlpha = Math.sin(Math.PI * lerp);
-                    renderer.context.lineWidth = 3;
-
-                    renderer.strokeCircle(position.x,position.y,radiusLerp,'white');
-
-                    renderer.context.lineWidth = 1;
-                    renderer.context.globalAlpha = 1;
-                })
-                .setEnd(function(){
-                    scene.removeEffect(this.id);
-                })
-            scene.addEffect(effect);
-        })
-        .setDraw(function(renderer, frameCount) {
-            return;
-        })
-    scene1.addButton(newAtomButton);
-    
-    const closeShopButton = new Button('Close Shop',scene1)
-        .setBounds({
-            x: 0.25 * system.renderer.width - 25,
-            y: 20,//0.10 * system.renderer.height,
-            w: 20,
-            h: 20
-        })
-        .setOnClick(function(event) {
-            if(system.shopElement === null) return;
-            let upgrades = system.gameData.getElement(system.shopElement).upgrades;
-            upgrades.forEach((upgrade,index)=>{
-                upgrade.button.setActive(false);
+    scene1.addButton(
+        new Button('New Atom', 'scroll', scene1)
+            .setBounds({
+                x: 0.25 * system.renderer.width,
+                y: 0,
+                w: 0.75 * system.renderer.width,
+                h: system.renderer.height
             })
-            system.closeShop();
-        })
-        .setDraw(function(renderer, frameCount) {
-            if(system.shopElement === null) return;
+            .setOnClick(function(event) {
+                let element = system.gameData.getElement(system.gameData.spawningElement);            
+                let scene = system.getScene('Main Scene');
+                
+                for(let i=0;i<element.increment;i++) {
+                    scene.particleManager.addAtom(element,scene.getScreen('Simulation Display'));
+                }
 
-            let box = this.getBounds();
-            renderer.context.fillStyle = 'rgba(255, 0, 0, 0.5)';
-            renderer.context.fillRect(box.x, box.y, box.w, box.h);
+                let position = {
+                    x: system.mousePosition.x,
+                    y: system.mousePosition.y
+                }
+                let effect = new Effect(system,`Click`)
+                    .setTimings(0,10)
+                    .setDraw(function(renderer,frameCount){
+                        let lerp = this.currFrame / this.duration;
+                        let radiusLerp = 5 * (1 + 2 * lerp);
 
-            renderer.drawText(box.x + box.w/4,box.y + box.h/2,'X','white',20);
-            return;
-        });
-    scene1.addButton(closeShopButton);
+                        renderer.context.globalAlpha = Math.sin(Math.PI * lerp);
+                        renderer.context.lineWidth = 3;
+
+                        renderer.strokeCircle(position.x,position.y,radiusLerp,'white');
+
+                        renderer.context.lineWidth = 1;
+                        renderer.context.globalAlpha = 1;
+                    })
+                    .setEnd(function(){
+                        scene.removeEffect(this.id);
+                    })
+                scene.addEffect(effect);
+            })
+            .setDraw(function(renderer, frameCount) {
+                return;
+            })
+    )
+    .addButton(
+        new Button('Close Shop','click', scene1)
+            .setBounds({
+                x: 0.25 * system.renderer.width - 25,
+                y: 20,//0.10 * system.renderer.height,
+                w: 20,
+                h: 20
+            })
+            .setOnClick(function(event) {
+                if(system.shopElement === null) return;
+                let upgrades = system.gameData.getElement(system.shopElement).upgrades;
+                upgrades.forEach((upgrade,index)=>{
+                    upgrade.button.setActive(false);
+                })
+                system.closeShop();
+            })
+            .setDraw(function(renderer, frameCount) {
+                if(system.shopElement === null) return;
+
+                let box = this.getBounds();
+                renderer.context.fillStyle = 'rgba(255, 0, 0, 0.5)';
+                renderer.context.fillRect(box.x, box.y, box.w, box.h);
+
+                renderer.drawText(box.x + box.w/4,box.y + box.h/2,'X','white',20);
+                return;
+            })
+    )
+    .addButton(
+        new Button('Navigate Shop List','scroll', scene1)
+            .setBounds({
+                x: 0,
+                y: 0,
+                w: 0.25 * system.renderer.width,
+                h: system.renderer.height
+            })
+            .setOnClick(function(event) {
+                let system = this.parent.system;
+                let menuOffset = system.shopListOffset;
+                let scrollDirection = Math.sign(event.deltaY);
+                let shopCount = system.gameData.unlockedElements.length;
+                
+                if(menuOffset + scrollDirection < 0 || menuOffset + scrollDirection >= (shopCount)) {
+                    //Do nothing, limit at edges
+                    return;
+                }
+                this.parent.system.shopListOffset += scrollDirection;
+            })
+            .setDraw(function(renderer, frameCount) {
+            })
+    )
+    .addButton(
+        new Button('Switch Render Rype','click', scene1)
+            .setBounds({
+                x: system.renderer.width - 90,
+                y: 20,
+                w: 70,
+                h: 20
+            })
+            .setOnClick(function(event) {
+                let currRenderType = this.parent.renderType;
+                if(currRenderType==='Minimal') this.parent.setRenderType('Default')
+                if(currRenderType==='Default') this.parent.setRenderType('Minimal')
+            })
+            .setDraw(function(renderer, frameCount) {
+                let currRenderType = this.parent.renderType;
+                let box = this.getBounds();
+                renderer.context.fillStyle = 'rgba(255, 255, 255, 0.6)';
+                renderer.context.fillRect(box.x, box.y, box.w, box.h);
+
+                renderer.drawText(box.x + 5,box.y + 0.5 * box.h,'Render: ', 'white', 15);
+                renderer.drawText(box.x + 5,box.y + 1.5 * box.h,currRenderType, 'white', 15);
+            })
+    );
 
     scene1
         .setStart(function() {
@@ -1288,26 +1348,42 @@ function startSys() {
                 h: renderer.height
             })
             .setDraw(function(renderer, frameCount) {
-                if(system.shopElement!==null) return;
+                if(this.scene.system.shopElement!==null) return;
 
                 let box = this.getBounds();
                 renderer.context.fillStyle = 'rgba(255, 255, 255, 0.1)';
                 renderer.context.fillRect(box.x, box.y, box.w, box.h);
                 
-                let gameData = this.scene.system.gameData;
+                let system = this.scene.system; 
+                let scene = system.getScene('Main Scene');
+                let gameData = system.gameData;
+
+                let startX = 25;
+                let startY = 50;
+
+                let iconSize = 30;
 
                 //Get unlocked elements, and show starting at the general menu position
+                let hiddenElements = gameData.getUnlockedElements().slice(0,system.shopListOffset);
+                hiddenElements.forEach(function(element,index){
+                    element.shopButton.setBounds({
+                        x:0,
+                        y:0,
+                        w:0,
+                        h:0
+                    })
+                })
                 let displayElements = gameData.getUnlockedElements().slice(system.shopListOffset);
-
                 displayElements.forEach(function(element, index) {
+
+                    element.shopButton.setBounds({
+                        x: startX - iconSize/2,
+                        y: (startY + 50 * index) - iconSize/2,
+                        w: iconSize,
+                        h: iconSize
+                    })
                     let box = element.shopButton.getBounds();
                                     
-                    let system = element.gameData.system;
-                    let scene = system.getScene('Main Scene');
-
-                    let startX = 25;
-                    let startY = 50;
-
                     renderer.context.globalAlpha = 0.3;
                     renderer.context.fillStyle = element.color;
                     renderer.context.fillRect(box.x,box.y,box.w,box.h);
@@ -1318,7 +1394,7 @@ function startSys() {
                         .setRadius(5);
                     atom.draw(renderer, frameCount);
 
-                    renderer.drawText(startX + 25, startY + 50 * index,`${element.name} Atoms: ${element.getScore()}`, 'white', 15);
+                    renderer.drawText(box.x + iconSize/2 + 25, box.y + iconSize/2,`${element.name} Atoms: ${element.getScore()}`, 'white', 15);
                 })
             })
         const shopUI = new Screen(scene1, 'Shop UI')
@@ -1420,11 +1496,6 @@ function startSys() {
                         20
                     );
                     shift += 10 * atom.getMaxLevel();
-                    
-                    shiftLine();
-                    atom.setPosition(drawX,drawY + heightOffset)
-                        .draw(renderer,frameCount);
-                    unshiftLine();
                     
                     //Write description
                     jumpLine();
