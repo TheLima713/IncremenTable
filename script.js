@@ -338,6 +338,33 @@ class Element {
                 })
                 .setLabels(
                     function(){
+                        return 'Valence Bond';
+                    },
+                    function(){
+                        let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
+                        if(!nextElement) return ''
+
+                        return `Unlock ${nextElement.name} atoms.`;
+                    },
+                    function(){
+                        let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
+                        if(!nextElement) return '';
+
+                        return `${this.level}/${this.maxLevel}`;
+                    }
+                )
+                .setOnUpgrade(function(){
+                    let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
+                    if(!nextElement) return '';
+                    
+                    this.element.gameData.addUnlockedElement(nextElement);
+                }),
+            new Upgrade(this,300 + (10 * this.protons), 0, 1)
+                .setCostFunction(function(){
+                    return -1;//one time only
+                })
+                .setLabels(
+                    function(){
                         return 'Nuclear Fusion';
                     },
                     function(){
@@ -357,7 +384,7 @@ class Element {
                     let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
                     if(!nextElement) return '';
                     
-                    if(currSpawn.protons>=nextElement.protons) {
+                    if(this.element.protons>=nextElement.protons) {
                         //Do nothing, not worth to downgrade the spawning element
                         return '';
                     }
@@ -450,8 +477,15 @@ class ParticleManager {
                 })
             this.scene.addEffect(effect);
         }.bind(this))
-        this.atoms.forEach(function(atom) {
+        
+        this.atoms.forEach(function(atom, index) {
+            this.atoms[index].collided = false;
             this.checkCollisions(atom);
+            atom.run();
+        }.bind(this));
+        this.atoms.forEach(function(atom, index) {
+            this.checkCollisions(atom);
+            this.atoms[index].collided = true;
             atom.run();
         }.bind(this));
         return this;
@@ -496,6 +530,8 @@ class ParticleManager {
         
         this.atoms.forEach(function(atom2) {
             if (atom1.id === atom2.id) return;
+            if (atom1.collided === true) return;
+            if (atom2.collided === true) return;
 
             let dx = atom1.x - atom2.x;
             let dy = atom1.y - atom2.y;
@@ -527,7 +563,7 @@ class ParticleManager {
         }
 
         if(!gameData.unlockedElements.includes(newElement)) {
-            gameData.addUnlockedElement(newElement);
+            return [];
         }
 
         //Calculate Crits
@@ -1174,7 +1210,7 @@ class System {
     }
 }
 
-const system = new System();
+var system = new System();
 startSys()
 function startSys() {
     //Configure everything the system needs
