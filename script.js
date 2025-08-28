@@ -25,6 +25,103 @@ Game Ideas:
     Particle accelerator upgrade, makes all atoms move faster along X secs
 */
 
+class Vector {
+    constructor(x,y) {
+        this.x = x;
+        this.y = y;
+    }
+    add(v2) {
+        let out = new Vector(
+            this.x + v2.x,
+            this.y + v2.y
+        )
+        return out;
+    }
+    sub(v2) {
+        let out = new Vector(
+            this.x - v2.x,
+            this.y - v2.y
+        )
+        return out;
+    }
+    mult(v2) {
+        let out = new Vector(
+            this.x * v2.x,
+            this.y * v2.y
+        )
+        return out;
+    }
+    div(v2) {
+        if(v2.x===0 || v2.y===0) {
+            console.warn(`Error: Division by zero on Vector.div().`, this);
+            return;
+        }
+        let out = new Vector(
+            this.x / v2.x,
+            this.y / v2.y
+        )
+        return out;
+    }
+    scl(scale) {
+        let out = new Vector(
+            this.x * scale,
+            this.y * scale
+        )
+        return out;
+    }
+    mag() {
+        return Math.sqrt((this.x**2) + (this.y**2));
+    }
+    dot(v2, normalized = true) {
+        if(this.mag()===0) {
+            console.warn(`Vector.mag()===0 on Vector.dot()`, this);
+            return 0;
+        }
+        let out = this.x * v2.x + this.y * v2.y;
+        if(normalized) out /= this.mag();
+        return out;
+    }
+    rot(ang) {
+        let out = new Vector(
+            Math.cos(ang) * this.x - Math.sin(ang) * this.y,
+            Math.cos(ang) * this.y + Math.sin(ang) * this.x
+        )
+        return out;
+    }
+    lerp(v2,t) {
+        //L = A + T * (B - A)
+        let out = v2.sub(this)
+            .scl(t)
+            .add(this);
+        return out;
+    }
+    normalize() {
+        return this.scl(1/this.mag());
+    }
+    copy(v2) {
+        this.x = v2.x;
+        this.y = v2.y;
+        return this;
+    }
+    fromAng(ang) {
+        this.x = Math.cos(ang);
+        this.y = Math.sin(ang);
+        return this;
+    }
+    toAng() {
+        return Math.atan2(this.y,this.x);
+    }
+    random() {
+        return new Vector(Math.random(),Math.random());
+    }
+    equals(v2) {
+        return this.x===v2.x&&this.y===v2.y;
+    }
+    floor() {
+        let out = new Vector(Math.floor(this.x),Math.floor(this.y));
+        return out;
+    }
+}
 class Effect {
     constructor(system,label) {
         this.system = system;
@@ -71,25 +168,22 @@ class Effect {
 }
 //This is the class for the visuals of an Element
 class Atom {
-    constructor(particleManager,protons, electrons, color, screen, x = null, y = null, vx = null, vy = null) {
+    constructor(particleManager,protons, electrons, color, screen, position = undefined, velocity = undefined) {
         this.particleManager = particleManager;
         this.protons = protons;
         this.electrons = electrons;
         this.color = color;
         this.radius = 4;
         this.screen = screen;
+        this.state = 'active';
         
         let system = this.particleManager.scene.system;
         this.element = system.gameData.getElementByProtons(this.protons);
         
-        let rndX = screen.x + Math.floor(Math.random() * screen.width);
-        let rndY = screen.y + Math.floor(Math.random() * screen.height);
-        this.x = x || rndX;
-        this.y = y || rndY;
-
-        this.vx = vx || 1 * (Math.random() - 0.5);
-        this.vy = vy || 1 * (Math.random() - 0.5);
-        
+        if(position===undefined) this.position = new Vector().random().mult(screen.size).add(screen.position);
+        else this.position = position;
+        if(velocity===undefined) this.velocity = new Vector().random().sub(new Vector(0.5,0.5));
+        else this.velocity = velocity;        
         this.angle;
     }
     getMaxProtons(level) {return level === 0 ? 1 : 6*level}
@@ -114,29 +208,53 @@ class Atom {
         this.electrons = electrons;
         return this;
     }
-    setPosition(x, y) {
-        this.x = x;
-        this.y = y;
+    setPosition(position) {
+        this.position = position;
         return this;
     }
-    setSpeed(vx, vy) {
-        this.vx = vx;
-        this.vy = vy;
+    setSpeed(velocity) {
+        this.velocity = velocity;
         return this;
     }
     setAngle(angle) {
         this.angle = angle
     }
+    setState(state) {
+        this.state = state;
+        return this;
+    }
+    getState() {
+        return this.state;
+    }
     run() {
-        this.x += this.vx;
-        this.y += this.vy;
-        // Bounce off walls
-        let bounds = this.screen.getBounds();
-        if (this.x < bounds.x || this.x > bounds.x + bounds.w) {
-            this.vx *= -1;
+        if(this.state==='active') {
+            this.position = this.position.add(this.velocity);
+            // Bounce off walls
+            let bounds = this.screen.getBounds();
+            if (this.position.x < bounds.x || this.position.x > bounds.x + bounds.w) this.velocity = this.velocity.mult(new Vector(-1,1));
+            if (this.position.y < bounds.y || this.position.y > bounds.y + bounds.h) this.velocity = this.velocity.mult(new Vector(1,-1));
         }
-        if (this.y < bounds.y || this.y > bounds.y + bounds.h) {
-            this.vy *= -1;
+        if(this.state==='storing') {
+            //Animation: Orbit Vial
+
+            let dist = this.element.vialPosition.sub(this.position);
+            
+            let vialVersor = dist.normalize();
+            let vialVersorLeft = vialVersor.rot(-60 * Math.PI/180);
+            let lerpScale = (1-dist.mag()/1000);//Far->Close : 0 -> 1
+            let lerpDirection = vialVersorLeft.lerp(vialVersor,lerpScale);
+
+            let lerpStrength = this.element.vialStoreSpeed*(2 + Math.abs(Math.cos(Math.PI * lerpScale)));
+            this.velocity = lerpDirection.scl(lerpStrength);
+            this.position = this.position.add(this.velocity);
+
+            if(dist.mag() < 25) {
+                this.particleManager.removeAtom(this.id);
+                this.element.vialAtomCount++;
+                this.state = 'stored';
+            }
+        }
+        if(this.state==='stored') {
         }
         return this;
     }
@@ -148,8 +266,7 @@ class Atom {
                 renderer.drawAtom(
                     this.getMaxProtons,
                     this.getMaxElectrons,
-                    this.x,
-                    this.y,
+                    this.position,
                     this.radius,
                     this.protons,
                     this.electrons,
@@ -159,8 +276,7 @@ class Atom {
                 break;
             case 'Minimal':
                 renderer.fillCircle(
-                    this.x,
-                    this.y,
+                    this.position,
                     this.radius * this.getMaxLevel(),
                     this.color
                 )
@@ -184,36 +300,9 @@ class Upgrade {
 
         let system = this.element.gameData.system;
         let scene = system.getScene('Main Scene');
-        this.button = new Button(`${this.getLabel()} ${this.element.symbol}`,'click', this)
-            .setBounds({
-                x: 0,
-                y: 0,
-                w: 0,
-                h: 0
-            })
+        this.button = new Button(`${this.getLabel()} ${this.element.symbol}`,'click', this, new Vector(0,0), new Vector(0,0))
             .setOnClick((event)=>{
-                if(this.element.score<this.cost) return;
-                if(this.level===this.maxLevel) return;//Upgrade blocked or maxxed
-
-                this.element.score -= this.cost;
-                this.upgrade();
-
-                //Charge cost
-                let system = this.element.gameData.system;
-                let particleManager = system.getScene('Main Scene').particleManager;
-                let element = this.element
-
-                let availableAtoms = particleManager.atoms.filter((atom)=>{
-                    return element.symbol===atom.element.symbol;
-                });
-
-                for(let i=0;i<this.cost;i++) {
-                    particleManager.removeAtom(availableAtoms[i].id);
-                }
-                
-                //Increase cost
-                this.cost = this.getNewCost();//Math.floor(this.cost * this.costMultiplier, this.cost);
-                this.level++;
+                this.handleUpgradeAction();
             });
         scene.addButton(this.button);
     }
@@ -236,6 +325,37 @@ class Upgrade {
         this.upgrade = fn;
         return this;
     }
+    handleUpgradeAction() {
+        if(this.element.score<this.cost) return;
+        if(this.level===this.maxLevel) return;//Upgrade blocked or maxxed
+
+        this.element.score -= this.cost;
+        this.upgrade();
+
+        //Charge cost
+        let pendingCost = this.cost;
+        if(this.element.maxVialAtomCount>0) {
+            let costFromVial = Math.min(this.element.vialAtomCount, pendingCost);
+            this.element.vialAtomCount -= costFromVial;
+            pendingCost -= costFromVial;
+        }
+        let system = this.element.gameData.system;
+        let particleManager = system.getScene('Main Scene').particleManager;
+        let element = this.element
+
+        //PREP: This code needs to change to allow vault-stored points
+        let availableAtoms = particleManager.atoms.filter((atom)=>{
+            return element.symbol===atom.element.symbol;
+        });
+
+        for(let i=0;i<pendingCost;i++) {
+            particleManager.removeAtom(availableAtoms[i].id);
+        }
+        
+        //Increase cost
+        this.cost = this.getNewCost();//Math.floor(this.cost * this.costMultiplier, this.cost);
+        this.level++;
+    }
 }
 //This contains the parameters for an Element's incremental and others
 class Element {
@@ -247,6 +367,8 @@ class Element {
         this.protons = protons;
         this.electrons = electrons;
         this.color = color;
+        this.vialPosition;
+        //PREP: maybe add locked/unlocked or states for more organization
 
         this.score = 0;
         this.increment = 1; // Default increment value
@@ -257,6 +379,12 @@ class Element {
         this.spawnTimer = 0;
         this.maxSpawnTimer = 0;
 
+        this.vialAtomCount = 0;
+        this.maxVialAtomCount = 0;
+        this.vialStoreSpeed = 5;
+        this.vialStoreCount = 5;
+
+        this.upgradeShopOffset = 0;//index for shop
         this.upgrades = [
             new Upgrade(this, 10 + (this.protons), 0, 100)
                 .setCostFunction(function(){
@@ -275,6 +403,107 @@ class Element {
                 )
                 .setOnUpgrade(function(){
                     this.element.increment++;
+                }),
+            new Upgrade(this,40 + (10 * this.protons), 0, 10)
+                .setCostFunction(function(){
+                    return Math.floor(this.cost * 1.9);
+                })
+                .setLabels(
+                    function(){
+                        return 'Particle Generator';
+                    },
+                    function(){
+                        return `Periodically spawn a new atom.`;
+                    },
+                    function(){
+                        if(this.level===0) return '->10s';
+                        return `${this.element.maxSpawnTimer}s->${this.element.maxSpawnTimer-1}s`;
+                    }
+                )
+                .setOnUpgrade(function(){
+                    if(this.level===0) this.element.maxSpawnTimer = 10;
+                    else this.element.maxSpawnTimer--;
+                }),
+            new Upgrade(this,100 + (5 * this.protons), 0, 100)
+                .setCostFunction(function(){
+                    return Math.floor(this.cost * 1.3);
+                })
+                .setLabels(
+                    function(){
+                        return `Vial Capacity`;
+                    },
+                    function(){
+                        return `Store ${this.element.name} atoms outside the simulation.`;
+                    },
+                    function(){
+                        return `${this.element.maxVialAtomCount}->${this.element.maxVialAtomCount + 500}`;
+                    }
+                )
+                .setOnUpgrade(function(){
+                    this.element.maxVialAtomCount += 500;
+                }),
+            new Upgrade(this,125 + (5 * this.protons), 0, 100)
+                .setCostFunction(function(){
+                    return Math.floor(this.cost * 1.4);
+                })
+                .setLabels(
+                    function(){
+                        return `Sampling Speed`;
+                    },
+                    function(){
+                        return `Vials store atoms faster.`;
+                    },
+                    function(){
+                        return `${this.element.vialStoreSpeed}->${this.element.vialStoreSpeed + 5}`;
+                    }
+                )
+                .setOnUpgrade(function(){
+                    this.element.vialStoreSpeed += 5;
+                }),
+            new Upgrade(this,150 + (5 * this.protons), 0, 100)
+                .setCostFunction(function(){
+                    return Math.floor(this.cost * 1.4);
+                })
+                .setLabels(
+                    function(){
+                        return `Sample Size`;
+                    },
+                    function(){
+                        return `Vials store more atoms at once.`;
+                    },
+                    function(){
+                        return `${this.element.vialStoreCount}->${this.element.vialStoreCount + 5}`;
+                    }
+                )
+                .setOnUpgrade(function(){
+                    this.element.vialStoreCount += 5;
+                }),
+            new Upgrade(this,100 + (10 * this.protons), 0, 1)
+                .setCostFunction(function(){
+                    return -1;//one time only
+                })
+                .setLabels(
+                    function(){
+                        return 'Nuclear Fusion';
+                    },
+                    function(){
+                        let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
+                        if(!nextElement) return ''
+
+                        return `Unlock ${nextElement.name} atoms.`;
+                    },
+                    function(){
+                        let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
+                        if(!nextElement) return '';
+
+                        return `${this.level}/${this.maxLevel}`;
+                    }
+                )
+                .setOnUpgrade(function(){
+                    let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
+                    if(!nextElement) return '';
+                    
+                    this.element.gameData.addUnlockedElement(nextElement);
                 }),
             new Upgrade(this,20 + (10 * this.protons), 0, 100)
                 .setCostFunction(function(){
@@ -312,60 +541,13 @@ class Element {
                 .setOnUpgrade(function(){
                     this.element.critMultiplier++;
                 }),
-            new Upgrade(this,40 + (10 * this.protons), 0, 10)
-                .setCostFunction(function(){
-                    return Math.floor(this.cost * 1.9);
-                })
-                .setLabels(
-                    function(){
-                        return 'Particle Generator';
-                    },
-                    function(){
-                        return `Periodically spawn a new atom.`;
-                    },
-                    function(){
-                        if(this.level===0) return '->10s';
-                        return `${this.element.maxSpawnTimer}s->${this.element.maxSpawnTimer-1}s`;
-                    }
-                )
-                .setOnUpgrade(function(){
-                    if(this.level===0) this.element.maxSpawnTimer = 10;
-                    else this.element.maxSpawnTimer--;
-                }),
-            new Upgrade(this,100 + (10 * this.protons), 0, 1)
-                .setCostFunction(function(){
-                    return -1;//one time only
-                })
-                .setLabels(
-                    function(){
-                        return 'Valence Bond';
-                    },
-                    function(){
-                        let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
-                        if(!nextElement) return ''
-
-                        return `Unlock ${nextElement.name} atoms.`;
-                    },
-                    function(){
-                        let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
-                        if(!nextElement) return '';
-
-                        return `${this.level}/${this.maxLevel}`;
-                    }
-                )
-                .setOnUpgrade(function(){
-                    let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
-                    if(!nextElement) return '';
-                    
-                    this.element.gameData.addUnlockedElement(nextElement);
-                }),
             new Upgrade(this,300 + (10 * this.protons), 0, 1)
                 .setCostFunction(function(){
                     return -1;//one time only
                 })
                 .setLabels(
                     function(){
-                        return 'Nuclear Fusion';
+                        return 'Valence Bond';
                     },
                     function(){
                         let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
@@ -394,7 +576,7 @@ class Element {
 
         let system = this.gameData.system;
         let scene = system.getScene('Main Scene');
-        this.shopButton = new Button(`${this.name} Upgrades`, 'click', scene)
+        this.shopButton = new Button(`${this.name} Upgrades`, 'click', scene, new Vector(0,0), new Vector(0,0))
             .setBounds({
                 x: 0,
                 y: 0,
@@ -402,7 +584,7 @@ class Element {
                 h: 0
             })
             .setOnClick(function(event) {
-                if(system.shopElement !== null) return;
+                if(system.shopElement !== null) return;//shop already open
                 system.openShop(symbol);
             }.bind(this))
         scene.addButton(this.shopButton);
@@ -424,7 +606,6 @@ class Element {
             console.warn(`Upgrade ${upgrade} not found for ${this.name}.`);
             return null;
         }
-
     }
     incrementScore(ammount = this.increment) {
         this.score += ammount;
@@ -434,6 +615,9 @@ class Element {
     }
     setShopButton(button) {
         this.shopButton = button;
+    }
+    setVialPosition(position) {
+        this.vialPosition = position;
     }
 }
 class ParticleManager {
@@ -447,45 +631,30 @@ class ParticleManager {
         let deltaTime = 1/system.config.fps;
         let gameData = system.gameData;
 
-        let spawnElements = gameData.unlockedElements
+        //Handle Spawners
+        let spawnElements = gameData
+            .unlockedElements
             .filter(function(element){
                 return element.maxSpawnTimer>0;
-            })
+            });
         spawnElements.forEach(function(element){
-            element.spawnTimer+=deltaTime;
-            if(element.maxSpawnTimer>element.spawnTimer) return;
-            element.spawnTimer -= element.maxSpawnTimer;
-            let atom = this.addAtom(element,this.scene.getScreen('Simulation Display'));
-
-            let effect = new Effect(system,`Particle Generator ${element.symbol}`)
-                .setTimings(0,30)
-                .setDraw(function(renderer,frameCount){
-                    let lerp = this.currFrame / this.duration;
-                    let radiusLerp = 5 * (1 + 2 * lerp);
-
-                    renderer.context.globalAlpha = Math.sin(Math.PI * lerp);
-                    renderer.context.lineWidth = 3;
-
-                    renderer.strokeCircle(atom.x,atom.y,radiusLerp,'white');
-
-                    renderer.context.lineWidth = 1;
-                    renderer.context.globalAlpha = 1;
-                })
-                .setEnd(function(){
-                    let scene = this.system.getScene('Main Scene');
-                    scene.removeEffect(this.id);
-                })
-            this.scene.addEffect(effect);
-        }.bind(this))
+            this.handleAtomSpawner(element,deltaTime);
+        }.bind(this));
         
+        //Handle Vials
+
+        let vialElements = gameData
+            .unlockedElements
+            .filter(function(element){
+                return element.maxVialAtomCount>0;
+            });
+        vialElements.forEach(function(element,index){
+            this.handleVialStore(element, deltaTime);
+        }.bind(this))
+        //Handle Collisions
         this.atoms.forEach(function(atom, index) {
             this.atoms[index].collided = false;
             this.checkCollisions(atom);
-            atom.run();
-        }.bind(this));
-        this.atoms.forEach(function(atom, index) {
-            this.checkCollisions(atom);
-            this.atoms[index].collided = true;
             atom.run();
         }.bind(this));
         return this;
@@ -532,10 +701,10 @@ class ParticleManager {
             if (atom1.id === atom2.id) return;
             if (atom1.collided === true) return;
             if (atom2.collided === true) return;
+            if (atom1.state !== 'active') return;
+            if (atom2.state !== 'active') return;
 
-            let dx = atom1.x - atom2.x;
-            let dy = atom1.y - atom2.y;
-            let distance = Math.sqrt(dx * dx + dy * dy);
+            let distance = atom1.position.sub(atom2.position).mag();
             let centerDistances = atom1.radius * atom1.getMaxLevel() + atom2.radius * atom2.getMaxLevel();
 
             if (distance <= centerDistances && atom1.protons === atom2.protons && atom1.electrons === atom2.electrons) {
@@ -589,26 +758,12 @@ class ParticleManager {
         for(let i=0;i<finalMultiplier;i++) {
 
             let bounds = screen.getBounds();
-            let offsetPosition = {
-                x: 0.5 * (atom1.x + atom2.x),
-                y: 0.5 * (atom1.y + atom2.y)
-            }
-            if(i>0) {
-                offsetPosition = {
-                    x: bounds.x + bounds.w * Math.random(),
-                    y: bounds.y + bounds.h * Math.random()
-                }
-            }
+            let offsetPosition = atom1.position.add(atom2.position).scl(0.5);
+            if(i>0) offsetPosition = new Vector().random().mult(screen.size).add(screen.position);
             
             let newAtom = new Atom(this, newElement.protons, newElement.electrons, newElement.color, screen)
-                .setPosition(
-                    (offsetPosition.x),
-                    (offsetPosition.y)
-                )
-                .setSpeed(
-                    (atom1.vx + atom2.vx) / 2,
-                    (atom1.vy + atom2.vy) / 2
-                );
+                .setPosition(offsetPosition)
+                .setSpeed(atom1.velocity.add(atom2.velocity).scl(0.5));
             newAtoms.push(newAtom);
 
             this.addMergeEffects(newAtom,newElement, i);
@@ -626,7 +781,11 @@ class ParticleManager {
                 renderer.context.globalAlpha = Math.sin(Math.PI * lerp);
                 renderer.context.lineWidth = 3;
 
-                renderer.strokeCircle(newAtom.x,newAtom.y,radiusLerp,'white');
+                renderer.strokeCircle(
+                    newAtom.position,
+                    radiusLerp,
+                    'white'
+                );
 
                 renderer.context.lineWidth = 1;
                 renderer.context.globalAlpha = 1;
@@ -640,30 +799,20 @@ class ParticleManager {
                 let lineCount = 16;
                 let lerp = this.currFrame / this.duration;
                 let radius = newAtom.radius * newAtom.getMaxLevel();
-                let center = {
-                    x: newAtom.x,
-                    y: newAtom.y
-                };
 
                 for(let i=0;i<lineCount;i++) {
                     let rndAngle = 2 * Math.PI * Math.random();
                     let rndLength = radius * (0.5 + Math.random());
-                    let rndStart = {
-                        x: newAtom.x + (2 * radius) * Math.cos(rndAngle),
-                        y: newAtom.y + (2 * radius) * Math.sin(rndAngle)
-                    }
-                    let rndOffset = {
-                        x: (2 * Math.sin(Math.PI * lerp)) * rndLength * Math.cos(rndAngle),
-                        y: (2 * Math.sin(Math.PI * lerp)) * rndLength * Math.sin(rndAngle)
-                    }
+                    
+                    let rndVec = new Vector().fromAng(rndAngle);
+                    let rndStart = rndVec.scl(2*radius).add(newAtom.position);
+                    let rndOffset = rndVec.scl(rndLength * 2 * Math.sin(Math.PI * lerp));
                     
                     renderer.context.globalAlpha = 1-lerp;
 
                     renderer.fillLine(
-                        rndStart.x,
-                        rndStart.y,
-                        rndStart.x + rndOffset.x,
-                        rndStart.y + rndOffset.y,
+                        rndStart,
+                        rndStart.add(rndOffset),
                         'white',
                         1
                     );
@@ -678,16 +827,67 @@ class ParticleManager {
         if(i===0) this.scene.addEffect(baseEffect);
         else this.scene.addEffect(critEffect);
     }
+    handleAtomSpawner(element, deltaTime) {
+        element.spawnTimer+=deltaTime;
+        if(element.maxSpawnTimer>element.spawnTimer) return;
+        element.spawnTimer -= element.maxSpawnTimer;
+        let atom = this.addAtom(element,this.scene.getScreen('Simulation Display'));
+
+        let effect = new Effect(system,`Particle Generator ${element.symbol}`)
+            .setTimings(0,30)
+            .setDraw(function(renderer,frameCount){
+                let lerp = this.currFrame / this.duration;
+                let radiusLerp = 5 * (1 + 2 * lerp);
+
+                renderer.context.globalAlpha = Math.sin(Math.PI * lerp);
+                renderer.context.lineWidth = 3;
+
+                renderer.strokeCircle(
+                    atom.position,
+                    radiusLerp,
+                    'white'
+                );
+
+                renderer.context.lineWidth = 1;
+                renderer.context.globalAlpha = 1;
+            })
+            .setEnd(function(){
+                let scene = this.system.getScene('Main Scene');
+                scene.removeEffect(this.id);
+            })
+        this.scene.addEffect(effect);
+    }
+    handleVialStore(element, deltaTime) {
+        //Try to choose n atoms to store
+        let choosingCount = element.vialStoreCount;
+        //If vial can't handle all, use the max it allows
+        choosingCount = Math.min(choosingCount, element.maxVialAtomCount - element.vialAtomCount);
+
+        let storingAtoms = this.atoms.filter((atom)=>{return atom.element===element && atom.state === 'storing'});
+        //If already storing some ammount, only try to choose the remainder 
+        choosingCount = Math.max(0,choosingCount - storingAtoms.length);
+
+        let simulatedAtoms = this.atoms.filter((atom)=>{return atom.element===element && atom.state === 'active'});
+        //If not enough atoms on simulation, only choose the available ones
+        choosingCount = Math.min(simulatedAtoms.length,choosingCount);
+
+        for(let i=0;i<choosingCount;i++) {
+            let rndIdx = Math.floor(Math.random()*simulatedAtoms.length);
+            let rndAtom = simulatedAtoms[rndIdx];
+            if(!rndAtom) {
+                continue;
+            }
+            rndAtom.state = 'storing';
+        }
+    }
 }
 //This is meant to be used as a generic region collider for the mouse, the renderer's function is simply a helper
 class Button {
-    constructor(label, type, parent, x = undefined, y = undefined, width = undefined, height = undefined) {
+    constructor(label, type, parent, position = new Vector(0,0), size = new Vector(0,0)) {
         this.label = label;
         this.parent = parent;
-        this.x = x;
-        this.y = y;
-        this.width = width;
-        this.height = height;
+        this.position = position;
+        this.size = size;
         this.active = true;
         this.type = type;
 
@@ -696,17 +896,17 @@ class Button {
     }
     getBounds() {
         return {
-            x: this.x,
-            y: this.y,
-            w: this.width,
-            h: this.height
+            x: this.position.x,
+            y: this.position.y,
+            w: this.size.x,
+            h: this.size.y
         };
     }
     setBounds(bounds) {
-        this.x = bounds.x;
-        this.y = bounds.y;
-        this.width = bounds.w;
-        this.height = bounds.h;
+        this.position.x = bounds.x;
+        this.position.y = bounds.y;
+        this.size.x = bounds.w;
+        this.size.y = bounds.h;
         return this;
     }
     setOnClick(fn) {
@@ -724,32 +924,43 @@ class Button {
     getActive() {
         return this.active;
     }
+    intersects(box2) {
+        let box1Start = this.position;
+        let box1End = this.position.add(this.size);
+        
+        let box2Start = box2.position;
+        let box2End = box2.position.add(box2.size);
+
+        if(box2End.x < box1Start.x) return false;
+        if(box2End.y < box1Start.y) return false;
+        if(box2Start.x > box1End.x) return false;
+        if(box2Start.y > box1End.y) return false;
+
+        return true;
+    }
 }
 class Screen {
-    constructor(scene, label) {
+    constructor(scene, label, position = new Vector(0,0), size = new Vector(0,0)) {
         this.label = label;
         this.scene = scene;
-        let renderer = scene.system.renderer;
-        this.x = 0;
-        this.y = 0;
-        this.width = renderer.width;
-        this.height = renderer.height;
+        this.position = position;
+        this.size = size;
         this.drawIndex = 0;
         this.draw = function(){};
     }
     getBounds() {
         return {
-            x: this.x,
-            y: this.y,
-            w: this.width,
-            h: this.height
+            x: this.position.x,
+            y: this.position.y,
+            w: this.size.x,
+            h: this.size.y
         };
     }
     setBounds(bounds) {
-        this.x = bounds.x;
-        this.y = bounds.y;
-        this.width = bounds.w;
-        this.height = bounds.h;
+        this.position.x = bounds.x;
+        this.position.y = bounds.y;
+        this.size.x = bounds.w;
+        this.size.y = bounds.h;
         return this;
     }
     setDraw(fn) {
@@ -912,23 +1123,19 @@ class Scene {
             // Check if mouse position is within the bounds of any button
             let clicked = false;
             this.buttons.forEach(function(button) {
-                let bounds = button.getBounds();
-                let mousePosition = this.system.mousePosition;
-                this.system.eventBuffer.shift();
-
-                if(mousePosition.x < bounds.x) return;
-                if(mousePosition.y < bounds.y) return;
-                if(mousePosition.x > bounds.x + bounds.w) return;
-                if(mousePosition.y > bounds.y + bounds.h) return;
-
-                if(clicked) return;//Already processed
                 if(button.getActive()===false) return;
                 if(button.type!==event.type) return;
+                if(clicked) return;//Already processed
 
-                button.onClick(event);
+                let mouseBounds = new Button('mouse','none',null,this.system.mousePosition,new Vector(1,1));
+                if(button.intersects(mouseBounds)===false) return;
+
+                let out = button.onClick(event);
                 clicked = true;
+
                 return;
             }.bind(this));
+            this.system.eventBuffer.shift();
         }.bind(this));
     }
     handleEffects() {
@@ -990,7 +1197,7 @@ class GameData {
         ]
         this.spawningElement = 'H';
         this.currRecordScore = 0;
-        this.unlockedElements = [this.getElement('H')];
+        this.unlockedElements = [this.getElement('H'),this.getElement('He')];
     }
     getUnlockedElements() {
         return this.unlockedElements;
@@ -1053,7 +1260,7 @@ class Renderer {
         this.context.fillStyle = color;
         this.context.fillRect(0, 0, this.width, this.height);
     }
-    drawText(x, y, text, color = 'white', fontSize = 20) {
+    drawText(position, text, color = 'white', fontSize = 20) {
         if (this.context===undefined) return;
         this.context.fillStyle = color;
         this.context.font = fontSize + 'px monospace';
@@ -1061,34 +1268,34 @@ class Renderer {
         let textHeight = textDimensions.actualBoundingBoxAscent;
         let textWidth = textDimensions.width;
         //Canvas draw at baseline, so we need to adjust y position
-        this.context.fillText(text, x, y + textHeight / 2);
+        this.context.fillText(text, position.x, position.y + textHeight / 2);
         return textWidth
     }
-    fillLine(x1,y1,x2,y2,color,width = 1) {
+    fillLine(start,end,color,width = 1) {
         this.context.lineWidth = width;
         this.context.strokeStyle = color;
 
-        this.context.moveTo(x1,y1);
-        this.context.lineTo(x2,y2);
+        this.context.moveTo(start.x,start.y);
+        this.context.lineTo(end.x,end.y);
         this.context.stroke();
         
         this.context.lineWidth = 1;
     }
-    fillCircle(x, y, radius, color = 'white') {
+    fillCircle(position, radius, color = 'white') {
         if (this.context===undefined) return;
         this.context.fillStyle = color;
         this.context.beginPath();
-        this.context.arc(x, y, radius, 0, Math.PI * 2);
+        this.context.arc(position.x, position.y, radius, 0, Math.PI * 2);
         this.context.fill();
     }
-    strokeCircle(x, y, radius, color = 'white') {
+    strokeCircle(position, radius, color = 'white') {
         if (this.context===undefined) return;
         this.context.strokeStyle = color;
         this.context.beginPath();
-        this.context.arc(x, y, radius, 0, Math.PI * 2);
+        this.context.arc(position.x, position.y, radius, 0, Math.PI * 2);
         this.context.stroke();
     }
-    drawAtom(maxProtons, maxElectrons, x, y, radius, protons = 1, electrons = 1, angleOffset = 0, color1 = 'red', color2 = 'white') {
+    drawAtom(maxProtons, maxElectrons, position, radius, protons = 1, electrons = 1, angleOffset = 0, color1 = 'red', color2 = 'white') {
         //let maxProtons = (level) => {return level === 0 ? 1 : 6*level}
         //let maxElectrons = (level) => {return 2*(level + 1)**2};
         let particleSize = 2;
@@ -1106,9 +1313,8 @@ class Renderer {
                 let layerAngleDiff = angleOffset * protonLevel;
 
                 let angle = layerAngleDiff + (i / protonsToDraw) * Math.PI * 2;
-                let px = x + Math.cos(angle) * protonRadius;
-                let py = y + Math.sin(angle) * protonRadius;
-                this.fillCircle(px, py, particleSize, color1);
+                let pos = new Vector(Math.cos(angle),Math.sin(angle)).scl(protonRadius).add(position);
+                this.fillCircle(pos, particleSize, color1);
             }
             protonLevel++;
         }
@@ -1125,13 +1331,44 @@ class Renderer {
                 let layerAngleDiff = angleOffset * (electronLevel+1);
 
                 let angle = layerAngleDiff + (i / electronsToDraw) * Math.PI * 2;
-                let px = x + Math.cos(angle) * electronRadius;
-                let py = y + Math.sin(angle) * electronRadius;
-                this.fillCircle(px, py, particleSize, color2);
+                let pos = new Vector(Math.cos(angle),Math.sin(angle)).scl(electronRadius).add(position);
+                this.fillCircle(pos, particleSize, color2);
             }
-            this.strokeCircle(x, y, electronRadius, color2);
+            this.strokeCircle(position, electronRadius, color2);
             electronLevel++;
         }
+    }
+    drawVial(position,size,element) {
+        let radius = 25;
+        
+        this.context.strokeStyle = element.color;
+        this.context.globalAlpha = 0.2;
+        this.context.lineWidth = 5;
+
+        this.context.beginPath();
+        this.context.arc(position.x, position.y, radius, 0, Math.PI * 2);
+        this.context.stroke();
+
+        this.context.strokeStyle = '#fff';
+
+        this.context.beginPath();
+        this.context.arc(position.x, position.y, radius+5, 0, Math.PI * 2);
+        this.context.stroke();
+
+        this.context.globalAlpha = 1;
+        this.context.lineWidth = 1;
+
+    }
+    fillBox(box, color, alpha = 1) {
+        this.context.globalAlpha = alpha;
+        this.context.fillStyle = color;
+        this.context.fillRect(
+            box.position.x,
+            box.position.y,
+            box.size.x,
+            box.size.y
+        );
+        this.context.globalAlpha = 1;
     }
 }
 class System {
@@ -1139,7 +1376,7 @@ class System {
         this.scenes = [];
         this.sceneIndex = 0;
         this.eventBuffer = [];
-        this.mousePosition = { x: 0, y: 0 };
+        this.mousePosition = new Vector(0,0);
         this.config = new Config();
 
         this.renderer;
@@ -1151,9 +1388,10 @@ class System {
     startListeners() {
         //Set listeners
         document.addEventListener('mouseup', function(event) {
+            let buttonTypes = ['click','scroll-click','right-click'];
             if(event.target !== this.renderer.canvas) return;
             this.eventBuffer.push({
-                type: 'click'
+                type: buttonTypes[event.button]
             });
         }.bind(this));
         document.addEventListener('mousemove', function(event) {
@@ -1161,14 +1399,16 @@ class System {
             let canvasPosition = canvas.getBoundingClientRect();
             let dx = event.clientX - canvasPosition.left;
             let dy = event.clientY - canvasPosition.top;
-            this.mousePosition.x = dx;
-            this.mousePosition.y = dy;
+            this.mousePosition = new Vector(dx,dy);
         }.bind(this));
         document.addEventListener('wheel',function(event){
             this.eventBuffer.push({
                 deltaY: event.deltaY,
                 type: 'scroll'
             });
+        }.bind(this));
+        document.addEventListener('contextmenu',function(event){
+            event.preventDefault();
         }.bind(this));
     }
     setRenderer(renderer) {
@@ -1229,8 +1469,33 @@ function startSys() {
 
     system.startListeners();
     
-    scene1.addButton(
-        new Button('New Atom', 'scroll', scene1)
+    scene1
+        .addButton(
+            new Button('Switch Render Rype','click', scene1)
+                .setBounds({
+                    x: system.renderer.width - 90,
+                    y: 20,
+                    w: 70,
+                    h: 20
+                })
+                .setOnClick(function(event) {
+                    let currRenderType = this.parent.renderType;
+                    if(currRenderType==='Minimal') this.parent.setRenderType('Default')
+                    if(currRenderType==='Default') this.parent.setRenderType('Minimal')
+                })
+                .setDraw(function(renderer, frameCount) {
+                    let currRenderType = this.parent.renderType;
+                    let box = this.getBounds();
+                    renderer.fillBox(this,'rgba(255, 255, 255)',0.6);
+
+                    let drawPos = this.position.add(new Vector(5, 0.5 * this.size.y));
+                    renderer.drawText(drawPos,'Render: ', 'white', 15);
+                    drawPos = drawPos.add(new Vector(0,this.size.y));
+                    renderer.drawText(drawPos,currRenderType, 'white', 15);
+                })
+        )
+        .addButton(
+        new Button('New Atom', 'click', scene1)
             .setBounds({
                 x: 0.25 * system.renderer.width,
                 y: 0,
@@ -1245,10 +1510,7 @@ function startSys() {
                     scene.particleManager.addAtom(element,scene.getScreen('Simulation Display'));
                 }
 
-                let position = {
-                    x: system.mousePosition.x,
-                    y: system.mousePosition.y
-                }
+                let position = new Vector().copy(system.mousePosition);
                 let effect = new Effect(system,`Click`)
                     .setTimings(0,10)
                     .setDraw(function(renderer,frameCount){
@@ -1258,7 +1520,11 @@ function startSys() {
                         renderer.context.globalAlpha = Math.sin(Math.PI * lerp);
                         renderer.context.lineWidth = 3;
 
-                        renderer.strokeCircle(position.x,position.y,radiusLerp,'white');
+                        renderer.strokeCircle(
+                            position,
+                            radiusLerp,
+                            'white'
+                        );
 
                         renderer.context.lineWidth = 1;
                         renderer.context.globalAlpha = 1;
@@ -1271,80 +1537,72 @@ function startSys() {
             .setDraw(function(renderer, frameCount) {
                 return;
             })
-    )
-    .addButton(
-        new Button('Close Shop','click', scene1)
-            .setBounds({
-                x: 0.25 * system.renderer.width - 25,
-                y: 20,//0.10 * system.renderer.height,
-                w: 20,
-                h: 20
-            })
-            .setOnClick(function(event) {
-                if(system.shopElement === null) return;
-                let upgrades = system.gameData.getElement(system.shopElement).upgrades;
-                upgrades.forEach((upgrade,index)=>{
-                    upgrade.button.setActive(false);
+        )
+        .addButton(
+            new Button('Navigate Shop List','scroll', scene1)
+                .setBounds({
+                    x: 0,
+                    y: 0,
+                    w: 0.25 * system.renderer.width,
+                    h: system.renderer.height
                 })
-                system.closeShop();
-            })
-            .setDraw(function(renderer, frameCount) {
-                if(system.shopElement === null) return;
+                .setOnClick(function(event) {
+                    let system = this.parent.system;
 
-                let box = this.getBounds();
-                renderer.context.fillStyle = 'rgba(255, 0, 0, 0.5)';
-                renderer.context.fillRect(box.x, box.y, box.w, box.h);
+                    if(system.shopElement===null) {
+                        //at main menu, scroll
+                        let menuOffset = system.shopListOffset;
+                        let scrollDirection = Math.sign(event.deltaY);
+                        let shopCount = system.gameData.unlockedElements.length;
+                        
+                        if(menuOffset + scrollDirection < 0 || menuOffset + scrollDirection >= (shopCount)) {
+                            return;//Do nothing, limit at edges
+                        }
+                        this.parent.system.shopListOffset += scrollDirection;
+                    }
+                    else {
+                        //at upgrade menu, scroll
+                        let currElement = system.gameData.getElement(system.shopElement);
+                        let menuOffset = currElement.upgradeShopOffset;
+                        let scrollDirection = Math.sign(event.deltaY);
+                        let shopCount = currElement.upgrades.length;
+                        
+                        if(menuOffset + scrollDirection < 0 || menuOffset + scrollDirection >= (shopCount)) {
+                            return;//Do nothing, limit at edges
+                        }
+                        currElement.upgradeShopOffset += scrollDirection;
+                    }
+                })
+                .setDraw(function(renderer, frameCount) {
+                })
+        )
+        .addButton(
+            new Button('Close Shop','click', scene1)
+                .setBounds({
+                    x: 0.25 * system.renderer.width - 25,
+                    y: 20,//0.10 * system.renderer.height,
+                    w: 20,
+                    h: 20
+                })
+                .setOnClick(function(event) {
+                    if(system.shopElement === null) return;//no shop open to close
 
-                renderer.drawText(box.x + box.w/4,box.y + box.h/2,'X','white',20);
-                return;
-            })
-    )
-    .addButton(
-        new Button('Navigate Shop List','scroll', scene1)
-            .setBounds({
-                x: 0,
-                y: 0,
-                w: 0.25 * system.renderer.width,
-                h: system.renderer.height
-            })
-            .setOnClick(function(event) {
-                let system = this.parent.system;
-                let menuOffset = system.shopListOffset;
-                let scrollDirection = Math.sign(event.deltaY);
-                let shopCount = system.gameData.unlockedElements.length;
-                
-                if(menuOffset + scrollDirection < 0 || menuOffset + scrollDirection >= (shopCount)) {
-                    //Do nothing, limit at edges
+                    let upgrades = system.gameData.getElement(system.shopElement).upgrades;
+                    upgrades.forEach(function(upgrade,index){
+                        upgrade.button.setActive(false);//close all upgrades
+                    })
+                    system.closeShop();
+                })
+                .setDraw(function(renderer, frameCount) {
+                    if(system.shopElement === null) return;
+
+                    let box = this.getBounds();
+                    renderer.fillBox(this,'rgba(255, 0, 0)',0.5);
+
+                    renderer.drawText(new Vector(box.x + box.w/4,box.y + box.h/2),'X','white',20);
                     return;
-                }
-                this.parent.system.shopListOffset += scrollDirection;
-            })
-            .setDraw(function(renderer, frameCount) {
-            })
-    )
-    .addButton(
-        new Button('Switch Render Rype','click', scene1)
-            .setBounds({
-                x: system.renderer.width - 90,
-                y: 20,
-                w: 70,
-                h: 20
-            })
-            .setOnClick(function(event) {
-                let currRenderType = this.parent.renderType;
-                if(currRenderType==='Minimal') this.parent.setRenderType('Default')
-                if(currRenderType==='Default') this.parent.setRenderType('Minimal')
-            })
-            .setDraw(function(renderer, frameCount) {
-                let currRenderType = this.parent.renderType;
-                let box = this.getBounds();
-                renderer.context.fillStyle = 'rgba(255, 255, 255, 0.6)';
-                renderer.context.fillRect(box.x, box.y, box.w, box.h);
-
-                renderer.drawText(box.x + 5,box.y + 0.5 * box.h,'Render: ', 'white', 15);
-                renderer.drawText(box.x + 5,box.y + 1.5 * box.h,currRenderType, 'white', 15);
-            })
-    );
+                })
+        );
 
     scene1
         .setStart(function() {
@@ -1387,8 +1645,7 @@ function startSys() {
                 if(this.scene.system.shopElement!==null) return;
 
                 let box = this.getBounds();
-                renderer.context.fillStyle = 'rgba(255, 255, 255, 0.1)';
-                renderer.context.fillRect(box.x, box.y, box.w, box.h);
+                renderer.fillBox(this,'rgba(255, 255, 255)',0.1);
                 
                 let system = this.scene.system; 
                 let scene = system.getScene('Main Scene');
@@ -1420,17 +1677,15 @@ function startSys() {
                     })
                     let box = element.shopButton.getBounds();
                                     
-                    renderer.context.globalAlpha = 0.3;
-                    renderer.context.fillStyle = element.color;
-                    renderer.context.fillRect(box.x,box.y,box.w,box.h);
-                    renderer.context.globalAlpha = 1;
+                    renderer.fillBox(element.shopButton,element.color,0.3);
 
-                    let atom = new Atom(scene.particleManager, element.protons, element.electrons, element.color, element)
-                        .setPosition(startX, startY + 50 * index)
+                    let simulationScreen = system.getScene('Main Scene').getScreen('Simulation Display');
+                    let atom = new Atom(scene.particleManager, element.protons, element.electrons, element.color, simulationScreen)
+                        .setPosition(new Vector(startX, startY + 50 * index))
                         .setRadius(5);
                     atom.draw(renderer, frameCount);
 
-                    renderer.drawText(box.x + iconSize/2 + 25, box.y + iconSize/2,`${element.name} Atoms: ${element.getScore()}`, 'white', 15);
+                    renderer.drawText(new Vector(box.x + iconSize/2 + 25, box.y + iconSize/2),`${element.name} Atoms: ${element.getScore()}`, 'white', 15);
                 })
             })
         const shopUI = new Screen(scene1, 'Shop UI')
@@ -1449,15 +1704,12 @@ function startSys() {
                 let box = this.getBounds();
                 let element = system.gameData.getElement(system.shopElement);
                 let upgrades = element.upgrades;
-                upgrades.forEach((upgrade,index)=>{
+                upgrades.forEach(function(upgrade,index){
                     upgrade.button.setActive(true);
                 })
                 
                 //Draw Background
-                renderer.context.globalAlpha = 0.1;
-                renderer.context.fillStyle = element.color;
-                renderer.context.fillRect(box.x, box.y, box.w, box.h);
-                renderer.context.globalAlpha = 1;
+                renderer.fillBox(this,element.color,0.1);
 
                 //Helper vars
                 let shift = 0;
@@ -1473,24 +1725,39 @@ function startSys() {
                 let restartY = ()=>{drawY = 20}
                 
                 //Draw Menu
-                renderer.drawText(drawX,drawY,`${element.name} Shop`,'white',20);
+                renderer.drawText(new Vector(drawX,drawY),`${element.name} Shop`,'white',20);
                 jumpLine();
 
                 let particleManager = system.getScene('Main Scene').particleManager;
-                let atom = new Atom(particleManager, element.protons, element.electrons, element.color, element);
+                let simulationScreen = system.getScene('Main Scene').getScreen('Simulation Display');
+                let atom = new Atom(particleManager, element.protons, element.electrons, element.color, simulationScreen);
                 
-                shift = renderer.drawText(drawX,drawY,`Points: ${element.score}`,'white',17);
+                shift = renderer.drawText(new Vector(drawX,drawY),`Points: ${element.score}`,'white',17);
                 shift += 10 * atom.getMaxLevel();
                 shiftLine();
                 
-                atom.setPosition(drawX, drawY)
+                atom.setPosition(new Vector(drawX, drawY))
                     .setRadius(5)
                     .draw(renderer, frameCount);
 
                 unshiftLine();
 
+
+                
+                //Get unlocked elements, and show starting at the general menu position
+                let hiddenUpgrades = upgrades.slice(0,element.upgradeShopOffset);
+                hiddenUpgrades.forEach(function(upgrade,index){
+                    upgrade.button.setBounds({
+                        x:0,
+                        y:0,
+                        w:0,
+                        h:0
+                    })
+                })
+                let displayUpgrades = upgrades.slice(element.upgradeShopOffset);
+
                 //Draw Upgrade List
-                upgrades.forEach((upgrade,index)=>{
+                displayUpgrades.forEach(function(upgrade,index){
                     renderer.context.font = '20px monospace';
                     let textDimensions = renderer.context.measureText(upgrade.getLabel());
                     let textWidth = textDimensions.width;
@@ -1514,19 +1781,18 @@ function startSys() {
                     let buttonBounds = button.getBounds();
                     
                     //Draw Outline and Title
-                    renderer.context.globalAlpha = 0.2;
-                    renderer.context.fillStyle = '#fff';
-                    renderer.context.fillRect(buttonBounds.x, buttonBounds.y, buttonBounds.w, buttonBounds.h);
-                    renderer.context.globalAlpha = 1;
+                    renderer.fillBox(button,'#fff',0.2);
                     
-                    if(element.score<upgrade.cost || upgrade.level === upgrade.maxLevel) {
+                    if(upgrade.element.score<upgrade.cost || upgrade.level === upgrade.maxLevel) {
                         renderer.context.globalAlpha = 0.5;
                     }
                     let costDisplay = `${upgrade.cost} (${upgrade.getIncrease()})`;
                     if(upgrade.level === upgrade.maxLevel) costDisplay = 'Max';
                     shift = renderer.drawText(
-                        buttonBounds.x + padding.x,
-                        buttonBounds.y + padding.y + heightOffset,
+                        new Vector(
+                            buttonBounds.x + padding.x,
+                            buttonBounds.y + padding.y + heightOffset
+                        ),
                         `${upgrade.getLabel()} : ${costDisplay}`,
                         'white',
                         20
@@ -1545,8 +1811,10 @@ function startSys() {
                         }
                         renderer.context.font = '17px monospace';
                         shift = renderer.drawText(
-                            drawX,
-                            drawY + heightOffset,
+                            new Vector(
+                                drawX,
+                                drawY + heightOffset
+                            ),
                             word + ' ',
                             'white',
                             17
@@ -1560,10 +1828,42 @@ function startSys() {
                     renderer.context.globalAlpha = 1;
                 })
             })
+        const vialUI = new Screen(scene1,'Vial UI')
+            .setBounds({
+                x: 0.25 * renderer.width,
+                y: 0,
+                w: renderer.width,
+                h: 0.25 * renderer.height
+            })
+            .setDraw(function(renderer,frameCount){
+                let vialElements = system.gameData.unlockedElements.filter(function(el){return el.maxVialAtomCount>0});
+                
+                vialElements.forEach(function(element,index){
+                    //Draw Vial outline
+                    let radius = 25;
+                    let drawPos = new Vector(index%10,index/10).floor().scl(100).add(new Vector(50 + 0.25*renderer.width,50));
+                    element.setVialPosition(drawPos);
+                    renderer.drawVial(drawPos,radius,element);
+
+                    //Draw filled Vial
+                    let fillPercent = element.vialAtomCount / element.maxVialAtomCount;
+                    let animatedRadius = radius * (fillPercent + 0.01 * (5 * Math.sin(frameCount/10)));
+                    if(animatedRadius<0) animatedRadius = 0;
+                    renderer.fillCircle(drawPos,animatedRadius,element.color)
+
+                    //Draw Text
+                    let textPos = drawPos.add(new Vector(
+                        -5 - 5 * Math.floor(Math.log10(element.vialAtomCount) + 1 + Math.log10(element.maxVialAtomCount)),
+                        2 * radius
+                    ));
+                    renderer.drawText(textPos,`${element.vialAtomCount}/${element.maxVialAtomCount}`,'white',15);
+                })
+            })
 
         scene1.addScreen(simulationDisplay);
         scene1.addScreen(mainUI);
         scene1.addScreen(shopUI);
+        scene1.addScreen(vialUI);
 
     // Run the first scene
     system.getScene('Main Scene').start();
