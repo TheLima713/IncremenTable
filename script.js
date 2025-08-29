@@ -15,6 +15,7 @@ System Hierarchy:
         - Renderer
         - GameData
             - Elements[]
+             - Upgrades[]
         - Scenes[]
             - Screens[]
             - ParticleManager
@@ -23,6 +24,10 @@ System Hierarchy:
 Game Ideas:
     Element Generator object in display, spawns every X secs
     Particle accelerator upgrade, makes all atoms move faster along X secs
+
+ERRORS TO FIX:
+- On merging with 200%+ criticals, with too many atoms, previous element becomes negative due to removing too many
+- fractional values are being incremented and losing a bit (ex: crit chance from 70%->79% intead of 80%)
 */
 
 class Vector {
@@ -245,7 +250,9 @@ class Atom {
             let lerpDirection = vialVersorLeft.lerp(vialVersor,lerpScale);
 
             let lerpStrength = this.element.vialStoreSpeed*(2 + Math.abs(Math.cos(Math.PI * lerpScale)));
-            this.velocity = lerpDirection.scl(lerpStrength);
+            this.velocity = lerpDirection.scl(Math.min(lerpStrength,0.9 * dist.mag()));
+            //Prevent overshooting
+            if(this.velocity>dist.mag()) this.velocity = this.velocity.normalize().scl(0.5 * dist.mag());
             this.position = this.position.add(this.velocity);
 
             if(dist.mag() < 25) {
@@ -285,12 +292,15 @@ class Atom {
 }
 //This is an instance of the various upgrades an element can have
 class Upgrade {
-    constructor(element, cost, level, maxLevel) {
+    constructor(element, label, cost, level, maxLevel) {
         this.element = element;
 
+        this.label = label;
         this.cost = cost;
         this.level = level;
         this.maxLevel = maxLevel;
+        this.state = 'locked';
+        this.dependantUpgrades = [];
 
         this.upgrade = function(){};
         this.getNewCost = function(){};
@@ -298,16 +308,15 @@ class Upgrade {
         this.getDescription = function(){};
         this.getIncrease = function(){};
 
-        let system = this.element.gameData.system;
+        this.system = this.element.gameData.system;
         let scene = system.getScene('Main Scene');
-        this.button = new Button(`${this.getLabel()} ${this.element.symbol}`,'click', this, new Vector(0,0), new Vector(0,0))
+        this.button = new Button(`${this.label} ${this.element.symbol}`,'click', this, new Vector(0,0), new Vector(0,0))
             .setOnClick((event)=>{
                 this.handleUpgradeAction();
             });
         scene.addButton(this.button);
     }
-    setLabels(getLabel, getDescription, getIncrease) {
-        this.getLabel = getLabel;
+    setLabels(getDescription, getIncrease) {
         this.getDescription = getDescription;
         this.getIncrease = getIncrease;
         return this;
@@ -323,6 +332,14 @@ class Upgrade {
     }
     setOnUpgrade(fn) {
         this.upgrade = fn;
+        return this;
+    }
+    setState(state) {
+        this.state = state;
+        return this;
+    }
+    setDependantUpgrades(arr) {
+        this.dependantUpgrades = arr;
         return this;
     }
     handleUpgradeAction() {
@@ -343,15 +360,25 @@ class Upgrade {
         let particleManager = system.getScene('Main Scene').particleManager;
         let element = this.element
 
-        //PREP: This code needs to change to allow vault-stored points
         let availableAtoms = particleManager.atoms.filter((atom)=>{
             return element.symbol===atom.element.symbol;
         });
 
-        for(let i=0;i<pendingCost;i++) {
-            particleManager.removeAtom(availableAtoms[i].id);
-        }
+        let atomsToRemove = availableAtoms.slice(0,pendingCost);
+        atomsToRemove.forEach(function(atom){
+            particleManager.removeAtom(atom.id);
+        })
         
+        //Unlock related upgrades
+        if(this.level===0) {
+            //Unlock other Vial Upgrades
+            let upgradeLabels = this.dependantUpgrades;
+            upgradeLabels.forEach(function(label){
+                let upgrade = this.element.getUpgrade(label);
+                if(upgrade.state==='locked') upgrade.setState('unlocked');
+            }.bind(this))
+        }
+
         //Increase cost
         this.cost = this.getNewCost();//Math.floor(this.cost * this.costMultiplier, this.cost);
         this.level++;
@@ -386,106 +413,104 @@ class Element {
 
         this.upgradeShopOffset = 0;//index for shop
         this.upgrades = [
-            new Upgrade(this, 10 + (this.protons), 0, 100)
+            new Upgrade(this, 'Atomic Click', 10 + (this.protons), 0, 100)
                 .setCostFunction(function(){
                     return Math.floor(this.cost * 1.25);
                 })
                 .setLabels(
                     function(){
-                        return 'Atomic Click';
-                    },
-                    function(){
                         return `Clicking creates more atoms.`;
                     },
                     function(){
-                        return `${this.element.increment}->${this.element.increment+1}`;
+                        let curr = this.system.formatNumber(this.element.increment);
+                        let next = this.system.formatNumber(this.element.increment+1);
+                        return `(${curr}->${next})`;
                     }
                 )
                 .setOnUpgrade(function(){
                     this.element.increment++;
-                }),
-            new Upgrade(this,40 + (10 * this.protons), 0, 10)
+                })
+                .setState('unlocked'),
+            new Upgrade(this, 'Particle Generator',40 + (10 * this.protons), 0, 10)
                 .setCostFunction(function(){
                     return Math.floor(this.cost * 1.9);
                 })
                 .setLabels(
                     function(){
-                        return 'Particle Generator';
-                    },
-                    function(){
                         return `Periodically spawn a new atom.`;
                     },
                     function(){
-                        if(this.level===0) return '->10s';
-                        return `${this.element.maxSpawnTimer}s->${this.element.maxSpawnTimer-1}s`;
+                        if(this.level===0) return '(->5s)';
+                        let curr = this.system.formatNumber(this.element.maxSpawnTimer);
+                        let next = this.system.formatNumber(this.element.maxSpawnTimer-1);
+                        return `(${curr}s->${next}s)`;
                     }
                 )
                 .setOnUpgrade(function(){
-                    if(this.level===0) this.element.maxSpawnTimer = 10;
+                    if(this.level===0) this.element.maxSpawnTimer = 5;
                     else this.element.maxSpawnTimer--;
-                }),
-            new Upgrade(this,100 + (5 * this.protons), 0, 100)
+                })
+                .setState('unlocked'),
+            new Upgrade(this,'Vial Capacity', 100 + (5 * this.protons), 0, 100)
                 .setCostFunction(function(){
                     return Math.floor(this.cost * 1.3);
                 })
                 .setLabels(
                     function(){
-                        return `Vial Capacity`;
-                    },
-                    function(){
                         return `Store ${this.element.name} atoms outside the simulation.`;
                     },
                     function(){
-                        return `${this.element.maxVialAtomCount}->${this.element.maxVialAtomCount + 500}`;
+                        let curr = this.system.formatNumber(this.element.maxVialAtomCount);
+                        let next = this.system.formatNumber(this.element.maxVialAtomCount+500);
+                        return `(${curr}->${next})`;
                     }
                 )
                 .setOnUpgrade(function(){
                     this.element.maxVialAtomCount += 500;
-                }),
-            new Upgrade(this,125 + (5 * this.protons), 0, 100)
+                })
+                .setState('unlocked')
+                .setDependantUpgrades(['Sampling Speed','Sample Size']),
+            new Upgrade(this,'Sampling Speed',125 + (5 * this.protons), 0, 100)
                 .setCostFunction(function(){
                     return Math.floor(this.cost * 1.4);
                 })
                 .setLabels(
-                    function(){
-                        return `Sampling Speed`;
-                    },
                     function(){
                         return `Vials store atoms faster.`;
                     },
                     function(){
-                        return `${this.element.vialStoreSpeed}->${this.element.vialStoreSpeed + 5}`;
+                        let curr = this.system.formatNumber(this.element.vialStoreSpeed);
+                        let next = this.system.formatNumber(this.element.vialStoreSpeed+5);
+                        return `(${curr}->${next})`;
                     }
                 )
                 .setOnUpgrade(function(){
                     this.element.vialStoreSpeed += 5;
-                }),
-            new Upgrade(this,150 + (5 * this.protons), 0, 100)
+                })
+                .setState('locked'),
+            new Upgrade(this,'Sample Size',150 + (5 * this.protons), 0, 100)
                 .setCostFunction(function(){
                     return Math.floor(this.cost * 1.4);
                 })
                 .setLabels(
                     function(){
-                        return `Sample Size`;
-                    },
-                    function(){
                         return `Vials store more atoms at once.`;
                     },
                     function(){
-                        return `${this.element.vialStoreCount}->${this.element.vialStoreCount + 5}`;
+                        let curr = this.system.formatNumber(this.element.vialStoreCount);
+                        let next = this.system.formatNumber(this.element.vialStoreCount+5);
+                        return `(${curr}->${next})`;
                     }
                 )
                 .setOnUpgrade(function(){
                     this.element.vialStoreCount += 5;
-                }),
-            new Upgrade(this,100 + (10 * this.protons), 0, 1)
+                })
+                .setState('locked'),
+            new Upgrade(this,'Nuclear Fusion',100 + (10 * this.protons), 0, 1)
                 .setCostFunction(function(){
                     return -1;//one time only
                 })
                 .setLabels(
-                    function(){
-                        return 'Nuclear Fusion';
-                    },
                     function(){
                         let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
                         if(!nextElement) return ''
@@ -496,7 +521,7 @@ class Element {
                         let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
                         if(!nextElement) return '';
 
-                        return `${this.level}/${this.maxLevel}`;
+                        return ``;
                     }
                 )
                 .setOnUpgrade(function(){
@@ -504,51 +529,50 @@ class Element {
                     if(!nextElement) return '';
                     
                     this.element.gameData.addUnlockedElement(nextElement);
-                }),
-            new Upgrade(this,20 + (10 * this.protons), 0, 100)
+                })
+                .setState('unlocked')
+                .setDependantUpgrades(['Valence Bond']),
+            new Upgrade(this,'Probability Cloud',20 + (10 * this.protons), 0, 100)
                 .setCostFunction(function(){
                     return Math.floor(this.cost * 1.5);
                 })
                 .setLabels(
                     function(){
-                        return 'Probability Cloud';
-                    },
-                    function(){
                         return `Atoms have a chance to create multiple atoms when merging.`;
                     },
                     function(){
-                        return `${Math.floor(this.element.critChance * 100)}%->${Math.floor((this.element.critChance+0.1) * 100)}%`;
+                        let curr = this.system.formatNumber(Math.floor((this.element.critChance) * 100));
+                        let next = this.system.formatNumber(Math.floor((this.element.critChance+0.1) * 100));
+                        return `(${curr}%->${next}%)`;
                     }
                 )
                 .setOnUpgrade(function(){
                     this.element.critChance+=0.1;
-                }),
-            new Upgrade(this,30 + (10 * this.protons), 1, 10)
+                })
+                .setState('unlocked'),
+            new Upgrade(this,'Core Density',30 + (10 * this.protons), 1, 10)
                 .setCostFunction(function(){
                     return Math.floor(this.cost * 1.75);
                 })
                 .setLabels(
                     function(){
-                        return 'Core Density';
-                    },
-                    function(){
                         return `Critical merges create more atoms.`;
                     },
                     function(){
-                        return `${this.element.critMultiplier}->${this.element.critMultiplier+1}`;
+                        let curr = this.system.formatNumber(this.element.critMultiplier);
+                        let next = this.system.formatNumber(this.element.critMultiplier+1);
+                        return `(${curr}->${next})`;
                     }
                 )
                 .setOnUpgrade(function(){
                     this.element.critMultiplier++;
-                }),
-            new Upgrade(this,300 + (10 * this.protons), 0, 1)
+                })
+                .setState('locked'),
+            new Upgrade(this,'Valence Bond',300 + (10 * this.protons), 0, 1)
                 .setCostFunction(function(){
                     return -1;//one time only
                 })
                 .setLabels(
-                    function(){
-                        return 'Valence Bond';
-                    },
                     function(){
                         let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
                         if(!nextElement) return ''
@@ -559,7 +583,7 @@ class Element {
                         let nextElement = this.element.gameData.getElementByProtons(this.element.protons+1);
                         if(!nextElement) return '';
 
-                        return `${this.level}/${this.maxLevel}`;
+                        return ``;
                     }
                 )
                 .setOnUpgrade(function(){
@@ -572,6 +596,7 @@ class Element {
                     }
                     this.element.gameData.spawningElement = nextElement.symbol;
                 })
+                .setState('locked')
         ]
 
         let system = this.gameData.system;
@@ -599,7 +624,7 @@ class Element {
         return this;
     }
     getUpgrade(label) {
-        let upgrade = this.upgrades.find((upgrade)=>{return upgrade.getLabel() === label})
+        let upgrade = this.upgrades.find((upgrade)=>{return upgrade.label === label})
         if(upgrade) {
             return upgrade;
         } else {
@@ -1197,7 +1222,7 @@ class GameData {
         ]
         this.spawningElement = 'H';
         this.currRecordScore = 0;
-        this.unlockedElements = [this.getElement('H'),this.getElement('He')];
+        this.unlockedElements = [this.getElement('H')];
     }
     getUnlockedElements() {
         return this.unlockedElements;
@@ -1448,6 +1473,21 @@ class System {
     closeShop() {
         this.shopElement = null;
     }
+    //Formats big values to have the K/M/B/T suffixes for huge quantities
+    formatNumber(number) {
+        if(number===null) return '';
+        if(number===undefined) return '';
+        let digitCount = Math.ceil(Math.log10(number));
+        if(digitCount <= 3) return number.toString();
+
+        let magnitude = Math.floor((digitCount-1)/3);
+        let magnitudeDict = ['','K','M','B','T','q','Q','s,','S','O','N','D'];
+        let numberSuffix = magnitudeDict[magnitude];
+        let decimalsToKeep = 2;
+        let digitsToRemove = 3 * magnitude;
+        let shiftedNumber = number/(10**digitsToRemove);
+        return shiftedNumber.toFixed(decimalsToKeep) + numberSuffix;
+    }
 }
 
 var system = new System();
@@ -1495,48 +1535,48 @@ function startSys() {
                 })
         )
         .addButton(
-        new Button('New Atom', 'click', scene1)
-            .setBounds({
-                x: 0.25 * system.renderer.width,
-                y: 0,
-                w: 0.75 * system.renderer.width,
-                h: system.renderer.height
-            })
-            .setOnClick(function(event) {
-                let element = system.gameData.getElement(system.gameData.spawningElement);            
-                let scene = system.getScene('Main Scene');
-                
-                for(let i=0;i<element.increment;i++) {
-                    scene.particleManager.addAtom(element,scene.getScreen('Simulation Display'));
-                }
+            new Button('New Atom', 'scroll', scene1)
+                .setBounds({
+                    x: 0.25 * system.renderer.width,
+                    y: 0,
+                    w: 0.75 * system.renderer.width,
+                    h: system.renderer.height
+                })
+                .setOnClick(function(event) {
+                    let element = system.gameData.getElement(system.gameData.spawningElement);            
+                    let scene = system.getScene('Main Scene');
+                    
+                    for(let i=0;i<element.increment;i++) {
+                        scene.particleManager.addAtom(element,scene.getScreen('Simulation Display'));
+                    }
 
-                let position = new Vector().copy(system.mousePosition);
-                let effect = new Effect(system,`Click`)
-                    .setTimings(0,10)
-                    .setDraw(function(renderer,frameCount){
-                        let lerp = this.currFrame / this.duration;
-                        let radiusLerp = 5 * (1 + 2 * lerp);
+                    let position = new Vector().copy(system.mousePosition);
+                    let effect = new Effect(system,`Click`)
+                        .setTimings(0,10)
+                        .setDraw(function(renderer,frameCount){
+                            let lerp = this.currFrame / this.duration;
+                            let radiusLerp = 5 * (1 + 2 * lerp);
 
-                        renderer.context.globalAlpha = Math.sin(Math.PI * lerp);
-                        renderer.context.lineWidth = 3;
+                            renderer.context.globalAlpha = Math.sin(Math.PI * lerp);
+                            renderer.context.lineWidth = 3;
 
-                        renderer.strokeCircle(
-                            position,
-                            radiusLerp,
-                            'white'
-                        );
+                            renderer.strokeCircle(
+                                position,
+                                radiusLerp,
+                                'white'
+                            );
 
-                        renderer.context.lineWidth = 1;
-                        renderer.context.globalAlpha = 1;
-                    })
-                    .setEnd(function(){
-                        scene.removeEffect(this.id);
-                    })
-                scene.addEffect(effect);
-            })
-            .setDraw(function(renderer, frameCount) {
-                return;
-            })
+                            renderer.context.lineWidth = 1;
+                            renderer.context.globalAlpha = 1;
+                        })
+                        .setEnd(function(){
+                            scene.removeEffect(this.id);
+                        })
+                    scene.addEffect(effect);
+                })
+                .setDraw(function(renderer, frameCount) {
+                    return;
+                })
         )
         .addButton(
             new Button('Navigate Shop List','scroll', scene1)
@@ -1622,7 +1662,7 @@ function startSys() {
         const simulationDisplay = new Screen(scene1, 'Simulation Display')
             .setBounds({
                 x: 0.25 * renderer.width,
-                y: 0,
+                y: 0.10 * renderer.height,
                 w: 0.75 * renderer.width,
                 h: renderer.height
             })
@@ -1645,7 +1685,7 @@ function startSys() {
                 if(this.scene.system.shopElement!==null) return;
 
                 let box = this.getBounds();
-                renderer.fillBox(this,'rgba(255, 255, 255)',0.1);
+                renderer.fillBox(this,'rgba(255, 255, 255)',0.15);
                 
                 let system = this.scene.system; 
                 let scene = system.getScene('Main Scene');
@@ -1685,7 +1725,8 @@ function startSys() {
                         .setRadius(5);
                     atom.draw(renderer, frameCount);
 
-                    renderer.drawText(new Vector(box.x + iconSize/2 + 25, box.y + iconSize/2),`${element.name} Atoms: ${element.getScore()}`, 'white', 15);
+                    let formattedScore = system.formatNumber(element.getScore());
+                    renderer.drawText(new Vector(box.x + iconSize/2 + 25, box.y + iconSize/2),`${element.name} Atoms: ${formattedScore}`, 'white', 15);
                 })
             })
         const shopUI = new Screen(scene1, 'Shop UI')
@@ -1703,10 +1744,6 @@ function startSys() {
                 //Reactive upgrade buttons
                 let box = this.getBounds();
                 let element = system.gameData.getElement(system.shopElement);
-                let upgrades = element.upgrades;
-                upgrades.forEach(function(upgrade,index){
-                    upgrade.button.setActive(true);
-                })
                 
                 //Draw Background
                 renderer.fillBox(this,element.color,0.1);
@@ -1732,7 +1769,8 @@ function startSys() {
                 let simulationScreen = system.getScene('Main Scene').getScreen('Simulation Display');
                 let atom = new Atom(particleManager, element.protons, element.electrons, element.color, simulationScreen);
                 
-                shift = renderer.drawText(new Vector(drawX,drawY),`Points: ${element.score}`,'white',17);
+                let formattedScore = system.formatNumber(element.getScore());
+                shift = renderer.drawText(new Vector(drawX,drawY),`Points: ${formattedScore}`,'white',17);
                 shift += 10 * atom.getMaxLevel();
                 shiftLine();
                 
@@ -1742,10 +1780,14 @@ function startSys() {
 
                 unshiftLine();
 
-
+                let upgrades = element.upgrades;
+                upgrades.forEach(function(upgrade,index){
+                    upgrade.button.setActive(true);
+                })
+                let unlockedUpgrades = upgrades.filter(function(upg){return upg.state!=='locked'});
                 
                 //Get unlocked elements, and show starting at the general menu position
-                let hiddenUpgrades = upgrades.slice(0,element.upgradeShopOffset);
+                let hiddenUpgrades = unlockedUpgrades.slice(0,element.upgradeShopOffset);
                 hiddenUpgrades.forEach(function(upgrade,index){
                     upgrade.button.setBounds({
                         x:0,
@@ -1754,12 +1796,12 @@ function startSys() {
                         h:0
                     })
                 })
-                let displayUpgrades = upgrades.slice(element.upgradeShopOffset);
+                let displayUpgrades = unlockedUpgrades.slice(element.upgradeShopOffset);
 
                 //Draw Upgrade List
                 displayUpgrades.forEach(function(upgrade,index){
                     renderer.context.font = '20px monospace';
-                    let textDimensions = renderer.context.measureText(upgrade.getLabel());
+                    let textDimensions = renderer.context.measureText(upgrade.label);
                     let textWidth = textDimensions.width;
                     let heightOffset = textDimensions.actualBoundingBoxAscent/2;
 
@@ -1786,14 +1828,14 @@ function startSys() {
                     if(upgrade.element.score<upgrade.cost || upgrade.level === upgrade.maxLevel) {
                         renderer.context.globalAlpha = 0.5;
                     }
-                    let costDisplay = `${upgrade.cost} (${upgrade.getIncrease()})`;
+                    let costDisplay = `${system.formatNumber(upgrade.cost)} ${upgrade.getIncrease()}`;
                     if(upgrade.level === upgrade.maxLevel) costDisplay = 'Max';
                     shift = renderer.drawText(
                         new Vector(
                             buttonBounds.x + padding.x,
                             buttonBounds.y + padding.y + heightOffset
                         ),
-                        `${upgrade.getLabel()} : ${costDisplay}`,
+                        `${upgrade.label} : ${costDisplay}`,
                         'white',
                         20
                     );
@@ -1833,11 +1875,14 @@ function startSys() {
                 x: 0.25 * renderer.width,
                 y: 0,
                 w: renderer.width,
-                h: 0.25 * renderer.height
+                h: 0.10 * renderer.height
             })
             .setDraw(function(renderer,frameCount){
                 let vialElements = system.gameData.unlockedElements.filter(function(el){return el.maxVialAtomCount>0});
                 
+                let bgBox = new Button('dummy','none',this,this.position,this.size);
+                renderer.fillBox(bgBox,'#fff',0.1);
+
                 vialElements.forEach(function(element,index){
                     //Draw Vial outline
                     let radius = 25;
@@ -1856,7 +1901,8 @@ function startSys() {
                         -5 - 5 * Math.floor(Math.log10(element.vialAtomCount) + 1 + Math.log10(element.maxVialAtomCount)),
                         2 * radius
                     ));
-                    renderer.drawText(textPos,`${element.vialAtomCount}/${element.maxVialAtomCount}`,'white',15);
+                    let formattedVialCountDisplay = system.formatNumber(element.vialAtomCount) + '/' + system.formatNumber(element.maxVialAtomCount);
+                    renderer.drawText(textPos,formattedVialCountDisplay,'white',15);
                 })
             })
 
