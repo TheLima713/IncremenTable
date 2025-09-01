@@ -400,7 +400,7 @@ class Element {
         this.score = 0;
         this.increment = 1; // Default increment value
         
-        this.critChance = 0.0;
+        this.critChance = 0;
         this.critMultiplier = 2;
 
         this.spawnTimer = 0;
@@ -541,15 +541,16 @@ class Element {
                         return `Atoms have a chance to create multiple atoms when merging.`;
                     },
                     function(){
-                        let curr = this.system.formatNumber(Math.floor((this.element.critChance) * 100));
-                        let next = this.system.formatNumber(Math.floor((this.element.critChance+0.1) * 100));
+                        let curr = this.system.formatNumber(this.element.critChance);
+                        let next = this.system.formatNumber(this.element.critChance + 10);
                         return `(${curr}%->${next}%)`;
                     }
                 )
                 .setOnUpgrade(function(){
-                    this.element.critChance+=0.1;
+                    this.element.critChance+=10;
                 })
-                .setState('unlocked'),
+                .setState('unlocked')
+                .setDependantUpgrades(['Core Density']),
             new Upgrade(this,'Core Density',30 + (10 * this.protons), 1, 10)
                 .setCostFunction(function(){
                     return Math.floor(this.cost * 1.75);
@@ -761,9 +762,9 @@ class ParticleManager {
         }
 
         //Calculate Crits
-        let guaranteedCrits = Math.floor(oldElement.critChance);
+        let guaranteedCrits = Math.floor(oldElement.critChance/100);
         let rndAttempt = Math.random();
-        if(rndAttempt<(oldElement.critChance-guaranteedCrits)) {
+        if(rndAttempt<Math.floor((oldElement.critChance/100)-guaranteedCrits)) {
             guaranteedCrits++;
         }
 
